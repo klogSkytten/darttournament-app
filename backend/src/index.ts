@@ -22,7 +22,7 @@ app.get('/api', (_req, res) => {
   });
 });
 
-app.get('/api/connectivity', (_req, res) => {
+ app.get('/api/connectivity', (req, res) => {
   res.status(200).json({
     ok: true,
     service: 'backend',
