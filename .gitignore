@@ -1,0 +1,28 @@
+# darttournament-app
+
+This repository contains the platform-independent Dart tournament application.
+
+## Structure
+
+- `backend`: API and business logic
+- `frontend`: admin UI
+- `broadcasting`: public display UI
+- `traefik`: reverse proxy and route configuration
+- `database`: migrations, seed data, and backups
+- `shared`: shared API contracts and models
+- `scripts`: operational scripts
+- `docs`: project documentation
+
+## Local development
+
+1. Copy `.env.example` to `.env`
+2. Review `compose.yml`
+3. Run:
+
+```bash
+docker compose up --build
+```
+
+## Purpose
+
+This app is designed to run in a Dockerized environment behind Traefik and connected to PostgreSQL.

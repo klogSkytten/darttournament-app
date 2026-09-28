@@ -1,0 +1,81 @@
+services:
+  traefik:
+    image: traefik:v3.1
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+    ports:
+      - "80:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - proxy
+    restart: unless-stopped
+
+  frontend:
+    image: klogskytten/darttournament-frontend:dev
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.frontend.rule=PathPrefix(`/`)
+      - traefik.http.routers.frontend.entrypoints=web
+      - traefik.http.services.frontend.loadbalancer.server.port=80
+    networks:
+      - proxy
+    restart: unless-stopped
+
+  backend:
+    image: klogskytten/darttournament-backend:dev
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.backend.rule=PathPrefix(`/api`)
+      - traefik.http.routers.backend.entrypoints=web
+      - traefik.http.routers.backend.priority=100
+      - traefik.http.services.backend.loadbalancer.server.port=8080
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      NODE_ENV: production
+    networks:
+      - proxy
+      - database
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: unless-stopped
+
+  broadcasting:
+    image: klogskytten/darttournament-broadcasting:dev
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.broadcasting.rule=PathPrefix(`/display`)
+      - traefik.http.routers.broadcasting.entrypoints=web
+      - traefik.http.routers.broadcasting.priority=100
+      - traefik.http.services.broadcasting.loadbalancer.server.port=80
+    networks:
+      - proxy
+    restart: unless-stopped
+
+  database:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - database-data:/var/lib/postgresql/data
+    networks:
+      - database
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+networks:
+  proxy:
+  database:
+    internal: true
+
+volumes:
+  database-data:

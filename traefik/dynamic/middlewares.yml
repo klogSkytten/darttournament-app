@@ -1,0 +1,10 @@
+http:
+  middlewares:
+    strip-api-prefix:
+      stripPrefix:
+        prefixes:
+          - /api
+    strip-display-prefix:
+      stripPrefix:
+        prefixes:
+          - /display
