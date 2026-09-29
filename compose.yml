@@ -32,6 +32,7 @@ services:
       - traefik.http.routers.backend.entrypoints=web
       - traefik.http.routers.backend.priority=100
       - traefik.http.services.backend.loadbalancer.server.port=8080
+      - traefik.docker.network=darttournament-proxy
     environment:
       DATABASE_URL: ${DATABASE_URL}
       NODE_ENV: production
@@ -74,6 +75,7 @@ services:
 
 networks:
   proxy:
+    name: darttournament-proxy
   database:
     internal: true
 
