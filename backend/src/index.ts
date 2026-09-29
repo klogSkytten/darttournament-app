@@ -1,5 +1,6 @@
 import express from 'express';
 import { config } from './config.js';
+import { database } from './database.js';
 
 const app = express();
 
@@ -14,6 +15,28 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+app.get('/api/ready', async (_req, res) => {
+  try {
+    await database.query('SELECT 1');
+    res.status(200).json({
+      ok: true,
+      status: 'ready',
+      checks: { database: 'ok' },
+      message: 'Backend and database connectivity OK',
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('Database readiness check failed:', error);
+    res.status(503).json({
+      ok: false,
+      status: 'not_ready',
+      checks: { database: 'error' },
+      message: 'Backend is reachable, but the database connection failed',
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
 app.get('/api', (_req, res) => {
   res.json({
     name: 'darttournament-backend',
@@ -22,7 +45,7 @@ app.get('/api', (_req, res) => {
   });
 });
 
- app.get('/api/connectivity', (req, res) => {
+app.get('/api/connectivity', (req, res) => {
   res.status(200).json({
     ok: true,
     service: 'backend',

@@ -23,12 +23,12 @@ app.get('/display', (_req, res) => {
         <div class="card">
           <h1>Display</h1>
           <p>Broadcasting placeholder</p>
-          <p id="status">Verbinde mit Backend...</p>
+          <p id="status">Prüfe Backend und Datenbank...</p>
           <div id="details" class="meta"></div>
         </div>
 
         <script>
-          const backendUrl = '/api/connectivity';
+          const backendUrl = '/api/ready';
           const statusEl = document.getElementById('status');
           const detailsEl = document.getElementById('details');
 
