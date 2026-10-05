@@ -1,4 +1,5 @@
 const express = require('express');
+const { version: appVersion } = require('../package.json');
 
 const app = express();
 const port = process.env.PORT || 80;
@@ -17,6 +18,7 @@ app.get('/', (_req, res) => {
           .error { color: red; font-weight: bold; }
           .card { border: 1px solid #d5d7db; border-radius: 12px; padding: 1.25rem; max-width: 650px; background: white; }
           .meta { margin-top: 0.75rem; color: #444; }
+          .version { display: inline-block; padding: 0.35rem 0.7rem; border-radius: 999px; background: #e8f5ef; color: #145c50; font-weight: bold; margin-bottom: 0.8rem; }
           .actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.5rem; }
           .button { display: inline-block; padding: 0.7rem 1rem; border-radius: 4px; background: #145c50; color: white; text-decoration: none; }
           .button:hover { background: #0e493f; }
@@ -24,6 +26,7 @@ app.get('/', (_req, res) => {
       </head>
       <body>
         <div class="card">
+          <div class="version">Version: ${appVersion}</div>
           <h1>Dart Tournament Admin</h1>
           <p>Frontend placeholder</p>
           <p id="status">Prüfe Backend und Datenbank...</p>
@@ -64,5 +67,5 @@ app.get('/', (_req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Frontend listening on port ${port}`);
+  console.log(`Frontend listening on port ${port} | version ${appVersion}`);
 });
