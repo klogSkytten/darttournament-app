@@ -1,44 +1,6 @@
-import { Pool } from 'pg';
-import { config } from './config.js';
-
-export const database = new Pool({
-  connectionString: config.databaseUrl,
-  connectionTimeoutMillis: 5_000,
-});
-
-const requiredTables = [
-  'tournaments',
-  'persons',
-  'teams',
-  'tournament_entries',
-  'tournament_entry_members',
-];
-
-export async function bootstrapDatabase(): Promise<void> {
-  const tableCheck = await database.query(
-    `
-      SELECT table_name
-      FROM information_schema.tables
-      WHERE table_schema = 'public'
-        AND table_name = ANY($1)
-    `,
-    [requiredTables],
-  );
-
-  const existingTables = new Set(tableCheck.rows.map((row) => row.table_name));
-  const missingTables = requiredTables.filter((tableName) => !existingTables.has(tableName));
-
-  if (missingTables.length === 0) {
-    console.log('Database schema is already initialized.');
-    return;
-  }
-
-  console.log(`Missing database tables: ${missingTables.join(', ')}. Creating them now...`);
-
-  await database.query('CREATE EXTENSION IF NOT EXISTS pgcrypto;');
-
-  await database.query(`
-    CREATE TABLE IF NOT EXISTS tournaments (
+exports.up = (pgm) => {
+  pgm.sql(`
+    CREATE TABLE tournaments (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL CHECK (btrim(name) <> ''),
       tournament_date DATE,
@@ -48,7 +10,7 @@ export async function bootstrapDatabase(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
-    CREATE TABLE IF NOT EXISTS persons (
+    CREATE TABLE persons (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       first_name TEXT NOT NULL CHECK (btrim(first_name) <> ''),
       last_name TEXT NOT NULL CHECK (btrim(last_name) <> ''),
@@ -58,7 +20,7 @@ export async function bootstrapDatabase(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
-    CREATE TABLE IF NOT EXISTS teams (
+    CREATE TABLE teams (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL CHECK (btrim(name) <> ''),
       member_low_person_id UUID NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
@@ -69,10 +31,10 @@ export async function bootstrapDatabase(): Promise<void> {
       UNIQUE (member_low_person_id, member_high_person_id)
     );
 
-    CREATE UNIQUE INDEX IF NOT EXISTS teams_name_case_insensitive_unique
+    CREATE UNIQUE INDEX teams_name_case_insensitive_unique
       ON teams (lower(btrim(name)));
 
-    CREATE TABLE IF NOT EXISTS tournament_entries (
+    CREATE TABLE tournament_entries (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       tournament_id UUID NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
       person_id UUID REFERENCES persons(id) ON DELETE RESTRICT,
@@ -82,15 +44,15 @@ export async function bootstrapDatabase(): Promise<void> {
       UNIQUE (id, tournament_id)
     );
 
-    CREATE UNIQUE INDEX IF NOT EXISTS tournament_entries_person_unique
+    CREATE UNIQUE INDEX tournament_entries_person_unique
       ON tournament_entries (tournament_id, person_id)
       WHERE person_id IS NOT NULL;
 
-    CREATE UNIQUE INDEX IF NOT EXISTS tournament_entries_team_unique
+    CREATE UNIQUE INDEX tournament_entries_team_unique
       ON tournament_entries (tournament_id, team_id)
       WHERE team_id IS NOT NULL;
 
-    CREATE TABLE IF NOT EXISTS tournament_entry_members (
+    CREATE TABLE tournament_entry_members (
       tournament_id UUID NOT NULL,
       tournament_entry_id UUID NOT NULL,
       person_id UUID NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
@@ -102,7 +64,7 @@ export async function bootstrapDatabase(): Promise<void> {
         ON DELETE CASCADE
     );
 
-    CREATE OR REPLACE FUNCTION validate_tournament_entry_member()
+    CREATE FUNCTION validate_tournament_entry_member()
     RETURNS TRIGGER
     LANGUAGE plpgsql
     AS $$
@@ -141,17 +103,20 @@ export async function bootstrapDatabase(): Promise<void> {
     END;
     $$;
 
-    DROP TRIGGER IF EXISTS tournament_entry_member_must_match_entry ON tournament_entry_members;
-
     CREATE TRIGGER tournament_entry_member_must_match_entry
       BEFORE INSERT OR UPDATE ON tournament_entry_members
       FOR EACH ROW
       EXECUTE FUNCTION validate_tournament_entry_member();
   `);
+};
 
-  console.log('Database schema initialization complete.');
-}
-
-database.on('error', (error) => {
-  console.error('Unexpected PostgreSQL pool error:', error);
-});
+exports.down = (pgm) => {
+  pgm.sql(`
+    DROP TABLE tournament_entry_members;
+    DROP FUNCTION validate_tournament_entry_member();
+    DROP TABLE tournament_entries;
+    DROP TABLE teams;
+    DROP TABLE persons;
+    DROP TABLE tournaments;
+  `);
+};

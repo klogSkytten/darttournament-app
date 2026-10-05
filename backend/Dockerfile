@@ -1,11 +1,12 @@
 FROM node:24-alpine
 
-WORKDIR /app
+WORKDIR /app/backend
 
-COPY package*.json ./
+COPY backend/package*.json ./
 RUN npm install
 
-COPY . .
+COPY backend/ ./
+COPY database/migrations/ /app/database/migrations/
 RUN npm run build
 
 ENV NODE_ENV=production

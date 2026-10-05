@@ -7,8 +7,58 @@ on:
   workflow_dispatch:
 
 jobs:
+  validate-migrations:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: darttournament
+          POSTGRES_USER: dartuser
+          POSTGRES_PASSWORD: change-me
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dartuser -d darttournament"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install backend dependencies
+        run: npm install
+        working-directory: backend
+
+      - name: Apply migrations
+        run: npm run db:migrate
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://dartuser:change-me@localhost:5432/darttournament
+
+      - name: Roll back latest migration
+        run: npm run db:rollback
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://dartuser:change-me@localhost:5432/darttournament
+
+      - name: Reapply migrations
+        run: npm run db:migrate
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://dartuser:change-me@localhost:5432/darttournament
+
   build-and-push:
     runs-on: ubuntu-latest
+    needs: validate-migrations
 
     steps:
       - name: Check out repository
@@ -23,7 +73,8 @@ jobs:
       - name: Build and push backend
         uses: docker/build-push-action@v6
         with:
-          context: ./backend
+          context: .
+          file: ./backend/Dockerfile
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/darttournament-backend:dev
