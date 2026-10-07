@@ -141,12 +141,82 @@ export async function bootstrapDatabase(): Promise<void> {
     END;
     $$;
 
+    CREATE OR REPLACE FUNCTION validate_tournament_entry_conflict()
+    RETURNS TRIGGER
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE
+      team_member_ids UUID[];
+    BEGIN
+      IF NEW.person_id IS NOT NULL THEN
+        IF EXISTS (
+          SELECT 1
+          FROM tournament_entries te
+          LEFT JOIN teams t ON t.id = te.team_id
+          WHERE te.tournament_id = NEW.tournament_id
+            AND (
+              te.person_id = NEW.person_id
+              OR (te.team_id IS NOT NULL AND (
+                t.member_low_person_id = NEW.person_id
+                OR t.member_high_person_id = NEW.person_id
+              ))
+            )
+            AND te.id <> NEW.id
+        ) THEN
+          RAISE EXCEPTION 'Person is already registered in this tournament as an individual or team member';
+        END IF;
+      END IF;
+
+      IF NEW.team_id IS NOT NULL THEN
+        SELECT array_agg(person_id) INTO team_member_ids
+        FROM (
+          SELECT member_low_person_id AS person_id FROM teams WHERE id = NEW.team_id
+          UNION ALL
+          SELECT member_high_person_id AS person_id FROM teams WHERE id = NEW.team_id
+        ) team_people;
+
+        IF EXISTS (
+          SELECT 1
+          FROM tournament_entries te
+          WHERE te.tournament_id = NEW.tournament_id
+            AND te.id <> NEW.id
+            AND (
+              te.person_id IS NOT NULL AND te.person_id = ANY(team_member_ids)
+              OR (
+                te.team_id IS NOT NULL
+                AND te.team_id <> NEW.team_id
+                AND EXISTS (
+                  SELECT 1
+                  FROM teams t
+                  WHERE t.id = te.team_id
+                    AND (
+                      t.member_low_person_id = ANY(team_member_ids)
+                      OR t.member_high_person_id = ANY(team_member_ids)
+                    )
+                )
+              )
+            )
+        ) THEN
+          RAISE EXCEPTION 'One or more team members are already registered in this tournament';
+        END IF;
+      END IF;
+
+      RETURN NEW;
+    END;
+    $$;
+
     DROP TRIGGER IF EXISTS tournament_entry_member_must_match_entry ON tournament_entry_members;
+    DROP TRIGGER IF EXISTS tournament_entry_conflict_guard ON tournament_entries;
 
     CREATE TRIGGER tournament_entry_member_must_match_entry
       BEFORE INSERT OR UPDATE ON tournament_entry_members
       FOR EACH ROW
       EXECUTE FUNCTION validate_tournament_entry_member();
+
+    CREATE TRIGGER tournament_entry_conflict_guard
+      BEFORE INSERT OR UPDATE ON tournament_entries
+      FOR EACH ROW
+      EXECUTE FUNCTION validate_tournament_entry_conflict();
   `);
 
   console.log('Database schema initialization complete.');
