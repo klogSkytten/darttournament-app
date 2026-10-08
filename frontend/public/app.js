@@ -23,7 +23,6 @@ const state = {
 };
 
 const noticeElement = document.getElementById('notice');
-const backendStatusElement = document.getElementById('backendStatus');
 const stepContentElement = document.querySelector('[data-step-content]');
 const stepNavigationElement = document.querySelector('[data-step-nav]');
 const broadcastIsActive = false;
@@ -208,7 +207,7 @@ function renderStepNavigation() {
 }
 
 function stepHeading(section) {
-  return `<div class="step-heading"><p class="eyebrow">BEREICH ${section.id} / 10</p><h1 id="viewTitle-${section.id}">${escapeHtml(section.title)}</h1><p>${escapeHtml(section.description)}</p></div>`;
+  return `<div class="step-heading"><h1 id="viewTitle-${section.id}">${escapeHtml(section.title)}</h1><p>${escapeHtml(section.description)}</p></div>`;
 }
 
 function renderTournamentRow(tournament) {
@@ -669,11 +668,8 @@ function bindStepActions() {
 
 async function loadData() {
   refreshHeaderStatuses();
-  backendStatusElement.textContent = 'Backend und Datenbank werden geprüft …';
-  backendStatusElement.className = 'connection-state is-visible';
   try {
-    const [ready, tournaments, persons, teams, entries] = await Promise.all([
-      apiRequest('/api/ready'),
+    const [tournaments, persons, teams, entries] = await Promise.all([
       apiRequest('/api/tournaments'),
       apiRequest('/api/persons'),
       apiRequest('/api/teams'),
@@ -683,8 +679,6 @@ async function loadData() {
     state.persons = persons.data || [];
     state.teams = teams.data || [];
     state.entries = entries.data || [];
-    backendStatusElement.textContent = `Backend verbunden · ${ready.message}`;
-    backendStatusElement.className = 'connection-state is-visible status-ok';
     renderTournaments();
     if (state.currentTournamentId && !state.tournaments.some((item) => item.id === state.currentTournamentId)) {
       state.currentTournamentId = null;
@@ -693,10 +687,8 @@ async function loadData() {
       renderStep();
     }
   } catch (error) {
-    backendStatusElement.textContent = `Verbindung fehlgeschlagen · ${error.message}`;
-    backendStatusElement.className = 'connection-state is-visible status-error';
     document.getElementById('tournamentsList').innerHTML = '<div class="loading-state">Turniere konnten nicht geladen werden. Prüfe die Verbindung und aktualisiere die Ansicht.</div>';
-    showNotice('Die Verwaltungsdaten konnten nicht vollständig geladen werden.', 'error');
+    showNotice(`Die Verwaltungsdaten konnten nicht vollständig geladen werden: ${error.message}`, 'error');
   }
 }
 

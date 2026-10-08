@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="dartstournament Logo">
+  <defs>
+    <linearGradient id="mark-fg" x1="3" y1="5" x2="30" y2="27" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6366F1"/>
+      <stop offset="1" stop-color="#8B5CF6"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" stroke="url(#mark-fg)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 5 L8 5 L8 12 L3 12"/>
+    <path d="M3 20 L8 20 L8 27 L3 27"/>
+    <path d="M8 8.5 L12 8.5"/>
+    <path d="M8 23.5 L12 23.5"/>
+    <path d="M12 8.5 L14 8.5 L14 23.5 L12 23.5"/>
+    <path d="M14 16 L18.6 16"/>
+    <circle cx="24.5" cy="16" r="4.8" stroke-width="2.6"/>
+  </g>
+  <circle cx="24.5" cy="16" r="2.1" fill="#F43F5E"/>
+</svg>

@@ -266,7 +266,6 @@ textarea:focus-visible {
   gap: 28px;
 }
 
-.eyebrow,
 .section-kicker {
   margin: 0 0 8px;
   color: var(--prime);
@@ -365,13 +364,6 @@ h1 {
 .button-small svg {
   width: 15px;
   height: 15px;
-}
-
-.button-plus {
-  margin-top: -2px;
-  font-size: 22px;
-  font-weight: 400;
-  line-height: 1;
 }
 
 .button:disabled {
@@ -548,27 +540,12 @@ h1 {
 .empty-state h3 { margin: 13px 0 6px; font-size: 16px; }
 .empty-state p { margin-bottom: 17px; color: var(--muted); font-size: 12px; }
 
-.empty-illustration {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
+.empty-logo {
+  display: block;
   width: 70px;
   height: 70px;
-  border: 1px solid #ebe8ff;
-  border-radius: 22px;
-  background: #f7f5ff;
-  transform: rotate(-9deg);
+  object-fit: contain;
 }
-
-.empty-illustration span {
-  width: 6px;
-  height: 32px;
-  border-radius: 5px;
-  background: #aaa0f4;
-}
-.empty-illustration span:nth-child(2n) { height: 42px; background: #7766e8; }
-.empty-illustration span:nth-child(3) { height: 20px; background: #c4bdfb; }
 
 .notice {
   position: absolute;
