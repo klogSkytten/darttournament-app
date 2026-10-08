@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f8fafc" />
+    <title>Dartstournament | Turnierverwaltung</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-frame">
+      <header class="topbar">
+        <a class="brand" href="#" aria-label="Dartstournament – Übersicht" data-view="1">
+          <img src="/logo-wordmark.svg" alt="dartstournament" />
+        </a>
+        <div class="topbar-actions" aria-label="Schnellzugriff">
+          <button class="icon-button" type="button" aria-label="Benachrichtigungen" title="Benachrichtigungen">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></svg>
+          </button>
+          <button class="icon-button" type="button" aria-label="Hilfe" title="Hilfe">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M9.6 9a2.5 2.5 0 1 1 4.5 1.5c-1.2 1.1-2.1 1.4-2.1 3M12 17.5h.01" /></svg>
+          </button>
+          <button class="icon-button" type="button" aria-label="Anzeigeoptionen" title="Anzeigeoptionen">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-1.7 2.9-.2-.1a1.7 1.7 0 0 0-1.9.3l-.1.1h-3.4l-.1-.2a1.7 1.7 0 0 0-1.5-1 1.7 1.7 0 0 0-.9.3l-.2.1-2.9-1.7.1-.2a1.7 1.7 0 0 0-.3-1.9l-.1-.1v-3.4l.2-.1a1.7 1.7 0 0 0 1-1.5 1.7 1.7 0 0 0-.3-.9l-.1-.2 1.7-2.9.2.1a1.7 1.7 0 0 0 1.9-.3l.1-.1h3.4l.1.2a1.7 1.7 0 0 0 1.5 1 1.7 1.7 0 0 0 .9-.3l.2-.1 2.9 1.7-.1.2a1.7 1.7 0 0 0 .3 1.9l.1.1v3.4z" /></svg>
+          </button>
+          <button class="icon-button" type="button" aria-label="Vollbild" title="Vollbild">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4" /></svg>
+          </button>
+          <button class="icon-button avatar-button" type="button" aria-label="Profil" title="Profil">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5" /><path d="M5.5 20a6.5 6.5 0 0 1 13 0" /></svg>
+          </button>
+        </div>
+      </header>
+
+      <main id="mainContent" class="main-content">
+        <section class="view view-overview is-active" id="view-1" data-view-panel="1" aria-labelledby="overviewTitle">
+          <div class="overview-heading">
+            <div>
+              <p class="eyebrow">DARTSTOURNAMENT / ADMINISTRATION</p>
+              <h1 id="overviewTitle">Turnierübersicht</h1>
+              <p class="subheading">Alle Turniere im Blick. Bereit für den nächsten Wurf?</p>
+            </div>
+            <div class="overview-actions">
+              <button class="button button-quiet" type="button" data-view="2">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19 13.5a1.5 1.5 0 0 0 .3 1.7l.1.1-1.5 2.6-.2-.1a1.5 1.5 0 0 0-1.7.3l-.1.1h-3l-.1-.2a1.5 1.5 0 0 0-1.3-.9 1.5 1.5 0 0 0-.8.3l-.2.1-2.6-1.5.1-.2a1.5 1.5 0 0 0-.3-1.7l-.1-.1v-3l.2-.1a1.5 1.5 0 0 0 .9-1.3 1.5 1.5 0 0 0-.3-.8l-.1-.2 1.5-2.6.2.1a1.5 1.5 0 0 0 1.7-.3l.1-.1h3l.1.2a1.5 1.5 0 0 0 1.3.9 1.5 1.5 0 0 0 .8-.3l.2-.1 2.6 1.5-.1.2a1.5 1.5 0 0 0 .3 1.7l.1.1v3z" /></svg>
+                Einstellungen
+              </button>
+              <button class="button button-primary" type="button" data-view="3">
+                <span class="button-plus" aria-hidden="true">+</span>
+                Neues Turnier
+              </button>
+            </div>
+          </div>
+
+          <div class="overview-stats">
+            <article class="stat-card">
+              <span class="stat-icon stat-icon-purple" aria-hidden="true">01</span>
+              <div><span class="stat-label">Turniere gesamt</span><strong id="tournamentCount">–</strong></div>
+            </article>
+            <article class="stat-card">
+              <span class="stat-icon stat-icon-green" aria-hidden="true"><span class="status-dot"></span></span>
+              <div><span class="stat-label">Aktuell laufend</span><strong id="runningCount">–</strong></div>
+            </article>
+            <article class="stat-card">
+              <span class="stat-icon stat-icon-gold" aria-hidden="true">✓</span>
+              <div><span class="stat-label">Abgeschlossen</span><strong id="finishedCount">–</strong></div>
+            </article>
+          </div>
+
+          <section class="surface tournament-surface" aria-labelledby="tournamentsHeading">
+            <div class="surface-heading">
+              <div>
+                <h2 id="tournamentsHeading">Deine Turniere</h2>
+                <p class="muted">Öffne ein Turnier, um die Verwaltung fortzusetzen.</p>
+              </div>
+              <button class="button button-small button-quiet" id="refreshButton" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5" /><path d="M5.5 9a7 7 0 0 1 12-2L20 12M4 12l2.5 5a7 7 0 0 0 12-2" /></svg>
+                Aktualisieren
+              </button>
+            </div>
+            <div id="backendStatus" class="connection-state" role="status">Verbindung wird geprüft …</div>
+            <div id="tournamentsList" class="tournament-list">
+              <div class="loading-state">Turniere werden geladen …</div>
+            </div>
+          </section>
+          <div id="notice" class="notice" role="status" aria-live="polite"></div>
+        </section>
+
+        <section class="view settings-view" id="view-2" data-view-panel="2" aria-labelledby="settingsTitle" hidden>
+          <div class="settings-topline">
+            <span class="section-kicker">ALLGEMEINE EINSTELLUNGEN</span>
+            <button class="back-button" type="button" data-view="1">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6M9 12h11" /></svg>
+              Zurück
+            </button>
+          </div>
+          <div class="settings-content">
+            <p class="eyebrow">PERSÖNLICHER BEREICH</p>
+            <h1 id="settingsTitle">Einstellungen</h1>
+            <p class="subheading">Vorgaben für neue Turniere und die Administration.</p>
+            <article class="surface settings-placeholder">
+              <span class="placeholder-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M19 13.5a1.5 1.5 0 0 0 .3 1.7l.1.1-1.5 2.6-.2-.1a1.5 1.5 0 0 0-1.7.3l-.1.1h-3l-.1-.2a1.5 1.5 0 0 0-1.3-.9 1.5 1.5 0 0 0-.8.3l-.2.1-2.6-1.5.1-.2a1.5 1.5 0 0 0-.3-1.7l-.1-.1v-3l.2-.1a1.5 1.5 0 0 0 .9-1.3 1.5 1.5 0 0 0-.3-.8l-.1-.2 1.5-2.6.2.1a1.5 1.5 0 0 0 1.7-.3l.1-.1h3l.1.2a1.5 1.5 0 0 0 1.3.9 1.5 1.5 0 0 0 .8-.3l.2-.1 2.6 1.5-.1.2a1.5 1.5 0 0 0 .3 1.7l.1.1v3z" /></svg>
+              </span>
+              <h2>Deine Vorgaben kommen bald</h2>
+              <p>Diese Seite ist für allgemeine Standardwerte vorgesehen. Die konkreten Einstellungen werden in einem späteren Schritt festgelegt.</p>
+              <button class="button button-primary" type="button" data-view="1">Zur Turnierübersicht</button>
+            </article>
+          </div>
+        </section>
+
+        <section class="view workflow-view" id="view-3" data-view-panel="3" aria-labelledby="viewTitle-3" hidden>
+          <aside class="step-sidebar">
+            <div class="sidebar-context"><span class="context-mark">D</span><div><strong id="workflowTournamentName">Neues Turnier</strong><span>TURNIER-KONFIGURATION</span></div></div>
+            <nav class="step-nav" aria-label="Turnierbereiche" data-step-nav></nav>
+            <button class="leave-button" type="button" data-view="1"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17l-5-5 5-5M5 12h13M19 5v14" /></svg>Turnier verlassen</button>
+          </aside>
+          <div class="step-main">
+            <div class="step-toolbar"><span class="section-kicker" data-step-kicker></span><span class="draft-badge"><span class="status-dot"></span> Entwurf</span></div>
+            <div class="step-content" data-step-content></div>
+            <div class="step-controls">
+              <button class="button button-quiet" type="button" data-step-previous>Zurück</button>
+              <button class="button button-primary" type="button" data-step-next>Weiter <span aria-hidden="true">→</span></button>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="bottombar">
+        <span class="footer-spacer"></span>
+        <span class="footer-credit">developed by <strong>klog and AI</strong></span>
+        <span class="footer-version">v__APP_VERSION__</span>
+      </footer>
+    </div>
+    <template id="tournamentEmptyTemplate">
+      <div class="empty-state">
+        <div class="empty-illustration" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+        <h3>Hier ist noch Platz auf dem Board</h3>
+        <p>Lege dein erstes Turnier an und bring alle an die Oche.</p>
+        <button class="button button-primary" type="button" data-view="3">Erstes Turnier anlegen <span aria-hidden="true">→</span></button>
+      </div>
+    </template>
+  </body>
+</html>
