@@ -26,7 +26,83 @@ const noticeElement = document.getElementById('notice');
 const backendStatusElement = document.getElementById('backendStatus');
 const stepContentElement = document.querySelector('[data-step-content]');
 const stepNavigationElement = document.querySelector('[data-step-nav]');
+const broadcastIsActive = false;
 let noticeTimeout;
+
+const statusIcons = {
+  server: '<rect width="20" height="8" x="2" y="2" rx="2" ry="2" /><rect width="20" height="8" x="2" y="14" rx="2" ry="2" /><line x1="6" x2="6.01" y1="6" y2="6" /><line x1="6" x2="6.01" y1="18" y2="18" />',
+  serverOff: '<path d="M7 2h13a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-5" /><path d="M10 10 2.5 2.5C2 2 2 2.5 2 5v3a2 2 0 0 0 2 2h6z" /><path d="M22 17v-1a2 2 0 0 0-2-2h-1" /><path d="M4 14a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h16.5l1-.5.5.5-8-8H4z" /><path d="M6 18h.01" /><path d="m2 2 20 20" />',
+  databaseCheck: '<path d="m16 19 2 2 4-4" /><path d="M21 13.127V5" /><path d="M3 12A9 3 0 0 0 21 12" /><path d="M3 5V19A9 3 0 0 0 13.318 21.968" /><ellipse cx="12" cy="5" rx="9" ry="3" />',
+  databaseX: '<path d="m17 17 5 5" /><path d="M19.323 13.744A9 3 0 0 0 21 12" /><path d="M21 13.127V5" /><path d="m22 17-5 5" /><path d="M3 12A9 3 0 0 0 13.563 14.954" /><path d="M3 5V19A9 3 0 0 0 13 21.981" /><ellipse cx="12" cy="5" rx="9" ry="3" />'
+};
+
+function setServiceStatus(element, status, label, detail, icon) {
+  element.classList.remove('is-checking', 'is-idle', 'is-available', 'is-unavailable');
+  element.classList.add(status);
+  const title = detail ? `${label} · ${detail}` : label;
+  element.setAttribute('aria-label', title);
+  element.title = title;
+  if (icon) element.querySelector('svg').innerHTML = icon;
+}
+
+async function checkJsonEndpoint(url, isAvailable) {
+  try {
+    const response = await fetch(url, { cache: 'no-store' });
+    if (!response.ok) return { available: false, detail: `HTTP ${response.status}` };
+    const data = await response.json();
+    return isAvailable(data)
+      ? { available: true, detail: '' }
+      : { available: false, detail: 'Dienst meldet nicht bereit' };
+  } catch (error) {
+    return { available: false, detail: error.message || 'Verbindung fehlgeschlagen' };
+  }
+}
+
+async function checkBroadcastEndpoint() {
+  try {
+    const response = await fetch('/display', { method: 'HEAD', cache: 'no-store' });
+    return response.ok
+      ? { available: true, detail: '' }
+      : { available: false, detail: `HTTP ${response.status}` };
+  } catch (error) {
+    return { available: false, detail: error.message || 'Verbindung fehlgeschlagen' };
+  }
+}
+
+async function refreshHeaderStatuses() {
+  const [backend, database, broadcast] = await Promise.all([
+    checkJsonEndpoint('/api/health', (data) => data.status === 'ok' && data.service === 'backend'),
+    checkJsonEndpoint('/api/ready', (data) => data.ok === true && data.checks?.database === 'ok'),
+    checkBroadcastEndpoint()
+  ]);
+
+  setServiceStatus(
+    document.getElementById('backendHealthStatus'),
+    backend.available ? 'is-available' : 'is-unavailable',
+    `Backend: ${backend.available ? 'erreichbar' : 'nicht erreichbar'}`,
+    backend.detail,
+    backend.available ? statusIcons.server : statusIcons.serverOff
+  );
+  setServiceStatus(
+    document.getElementById('databaseHealthStatus'),
+    database.available ? 'is-available' : 'is-unavailable',
+    `Datenbank: ${database.available ? 'erreichbar' : 'nicht erreichbar'}`,
+    database.detail,
+    database.available ? statusIcons.databaseCheck : statusIcons.databaseX
+  );
+
+  const broadcastStatus = document.getElementById('broadcastStatus');
+  const broadcastState = broadcast.available
+    ? (broadcastIsActive ? 'is-available' : 'is-idle')
+    : 'is-unavailable';
+  const broadcastLabel = !broadcast.available
+    ? 'Broadcasting: nicht erreichbar'
+    : broadcastIsActive
+      ? 'Broadcasting: aktiv'
+      : 'Broadcasting: erreichbar, nicht aktiv';
+  setServiceStatus(broadcastStatus, broadcastState, broadcastLabel, broadcast.detail, null);
+  broadcastStatus.disabled = !broadcast.available || !broadcastIsActive;
+}
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -592,6 +668,7 @@ function bindStepActions() {
 }
 
 async function loadData() {
+  refreshHeaderStatuses();
   backendStatusElement.textContent = 'Backend und Datenbank werden geprüft …';
   backendStatusElement.className = 'connection-state is-visible';
   try {
@@ -658,16 +735,14 @@ document.querySelector('[data-step-next]').addEventListener('click', () => {
 
 document.getElementById('refreshButton').addEventListener('click', loadData);
 
-document.querySelector('[aria-label="Vollbild"]').addEventListener('click', async () => {
-  try {
-    if (document.fullscreenElement) await document.exitFullscreen();
-    else await document.documentElement.requestFullscreen();
-  } catch (error) {
-    showNotice(`Vollbild konnte nicht geändert werden: ${error.message}`, 'error');
-  }
+document.getElementById('broadcastStatus').addEventListener('click', () => {
+  if (!broadcastIsActive || document.getElementById('broadcastStatus').disabled) return;
+  const displayWindow = window.open('/display', '_blank', 'noopener,noreferrer');
+  if (!displayWindow) showNotice('Das Broadcasting-Fenster wurde vom Browser blockiert.', 'error');
 });
 
 renderStepNavigation();
 renderStep();
 renderTournaments();
 loadData();
+window.setInterval(refreshHeaderStatuses, 15000);

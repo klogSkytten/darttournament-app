@@ -15,21 +15,20 @@
           <img src="/logo-wordmark.svg" alt="dartstournament" />
         </a>
         <div class="topbar-actions" aria-label="Schnellzugriff">
-          <button class="icon-button" type="button" aria-label="Benachrichtigungen" title="Benachrichtigungen">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></svg>
+          <button class="language-indicator" type="button" lang="de" aria-label="Sprache: Deutsch" title="Deutsch">de</button>
+          <span class="header-divider" aria-hidden="true"></span>
+          <span class="icon-button service-indicator is-muted" id="clientsStatus" role="img" aria-label="Clients: keine Clients verbunden" title="Keine Clients verbunden">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect width="10" height="14" x="3" y="8" rx="2" /><path d="M5 4a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2h-2.4" /><path d="M8 18h.01" /></svg>
+          </span>
+          <button class="icon-button service-indicator is-checking" id="broadcastStatus" type="button" aria-label="Broadcasting: Status wird geprüft" title="Broadcasting-Status wird geprüft" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 8V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6" /><path d="M2 12a9 9 0 0 1 8 8" /><path d="M2 16a5 5 0 0 1 4 4" /><line x1="2" x2="2.01" y1="20" y2="20" /></svg>
           </button>
-          <button class="icon-button" type="button" aria-label="Hilfe" title="Hilfe">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M9.6 9a2.5 2.5 0 1 1 4.5 1.5c-1.2 1.1-2.1 1.4-2.1 3M12 17.5h.01" /></svg>
-          </button>
-          <button class="icon-button" type="button" aria-label="Anzeigeoptionen" title="Anzeigeoptionen">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-1.7 2.9-.2-.1a1.7 1.7 0 0 0-1.9.3l-.1.1h-3.4l-.1-.2a1.7 1.7 0 0 0-1.5-1 1.7 1.7 0 0 0-.9.3l-.2.1-2.9-1.7.1-.2a1.7 1.7 0 0 0-.3-1.9l-.1-.1v-3.4l.2-.1a1.7 1.7 0 0 0 1-1.5 1.7 1.7 0 0 0-.3-.9l-.1-.2 1.7-2.9.2.1a1.7 1.7 0 0 0 1.9-.3l.1-.1h3.4l.1.2a1.7 1.7 0 0 0 1.5 1 1.7 1.7 0 0 0 .9-.3l.2-.1 2.9 1.7-.1.2a1.7 1.7 0 0 0 .3 1.9l.1.1v3.4z" /></svg>
-          </button>
-          <button class="icon-button" type="button" aria-label="Vollbild" title="Vollbild">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4" /></svg>
-          </button>
-          <button class="icon-button avatar-button" type="button" aria-label="Profil" title="Profil">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5" /><path d="M5.5 20a6.5 6.5 0 0 1 13 0" /></svg>
-          </button>
+          <span class="icon-button service-indicator is-checking" id="backendHealthStatus" role="img" aria-label="Backend: Status wird geprüft" title="Backend-Status wird geprüft">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="8" x="2" y="2" rx="2" ry="2" /><rect width="20" height="8" x="2" y="14" rx="2" ry="2" /><line x1="6" x2="6.01" y1="6" y2="6" /><line x1="6" x2="6.01" y1="18" y2="18" /></svg>
+          </span>
+          <span class="icon-button service-indicator is-checking" id="databaseHealthStatus" role="img" aria-label="Datenbank: Status wird geprüft" title="Datenbank-Status wird geprüft">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 19 2 2 4-4" /><path d="M21 13.127V5" /><path d="M3 12A9 3 0 0 0 21 12" /><path d="M3 5V19A9 3 0 0 0 13.318 21.968" /><ellipse cx="12" cy="5" rx="9" ry="3" /></svg>
+          </span>
         </div>
       </header>
 
@@ -55,7 +54,7 @@
 
           <div class="overview-stats">
             <article class="stat-card">
-              <span class="stat-icon stat-icon-purple" aria-hidden="true">01</span>
+              <span class="stat-icon stat-icon-prime" aria-hidden="true">01</span>
               <div><span class="stat-label">Turniere gesamt</span><strong id="tournamentCount">–</strong></div>
             </article>
             <article class="stat-card">
