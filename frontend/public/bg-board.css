@@ -1,0 +1,87 @@
+/* Generiert von tools/build_assets.py - nicht von Hand aendern.
+   Dartboard als grossflaechiges Wasserzeichen.
+
+   Einbinden:  <link rel="stylesheet" href="/assets/bg-board.css">
+   Das war's - die Regel haengt an <body> und braucht kein Markup.
+
+   Gefaerbt wird ueber mask-image, nicht ueber background-image. Die SVG liefert
+   nur die Form, die Farbe kommt aus --board-ink. Deshalb funktioniert derselbe
+   Hintergrund mit prefers-color-scheme UND mit einem manuellen Umschalter -
+   und nur so laesst sich im Dark Mode auch die Farbe wechseln, nicht bloss
+   die Deckkraft. */
+
+:root {
+  --board-ink: #12355B;
+  --board-size: min(130vmax, 1500px);
+  --board-position: center;
+  --board-opacity: .055;
+
+  /* Als Data-URI eingebettet und nicht als url("bg-board.svg") referenziert:
+     mask-image unterliegt CORS, unter file:// ist jede Datei eine eigene Origin.
+     Die externe Datei wird dort blockiert, eine fehlgeschlagene Maske blendet
+     das Element ganz aus - beim Doppelklick auf die HTML waere nichts zu sehen.
+     Bitte nicht gegen den Dateipfad zurueck tauschen. Form und Datei sind
+     identisch, beides kommt aus tools/build_assets.py. */
+  --board-src: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32' width='32' height='32' aria-hidden='true' focusable='false'%3E %3Cg fill='none' stroke='%2312355B'%3E %3Ccircle cx='16' cy='16' r='15.0' stroke-width='0.5'/%3E %3Ccircle cx='16' cy='16' r='12.3' stroke-width='4.4' stroke-linecap='butt' stroke-dasharray='7.999 1.662'/%3E %3Ccircle cx='16' cy='16' r='6.6' stroke-width='2.6'/%3E %3C/g%3E %3Ccircle cx='16' cy='16' r='3.0' fill='%2312355B'/%3E %3C/svg%3E");
+}
+
+/* Dark Mode braucht eine helle Tonung: #12355B liegt weit unter Weiss, aber nur
+   knapp ueber einem dunklen Grund - mit derselben Farbe bliebe das Board dort
+   halb so praesent (dL* 1.95 statt 2.73, gemessen gegen #0B1020).
+
+   Die niedrigere Deckkraft ist kein Schaetzwert: .033 auf dunkel ergibt
+   denselben Helligkeitsabstand wie .055 auf hell (dL* 2.7). Nachrechnen mit
+   python tools/preview_board.py */
+@media (prefers-color-scheme: dark) {
+  :root { --board-ink: #ACB8C6; --board-opacity: .033; }
+}
+
+/* Manueller Umschalter, z.B. <html data-theme="dark">. Gewinnt ueber die
+   Media Query, weil der Attribut-Selektor spezifischer ist als :root. */
+[data-theme="light"] { --board-ink: #12355B;      --board-opacity: .055; }
+[data-theme="dark"]  { --board-ink: #ACB8C6; --board-opacity: .033; }
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: var(--board-ink);
+  -webkit-mask: var(--board-src) var(--board-position) / var(--board-size) no-repeat;
+          mask: var(--board-src) var(--board-position) / var(--board-size) no-repeat;
+  opacity: var(--board-opacity);
+}
+
+/* Ohne mask-image wuerde die background-color die ganze Flaeche einfaerben.
+   Deshalb hier zurueck auf background-image. Dort steckt die Farbe in der SVG,
+   der Dark-Mode-Wechsel faellt also weg - das Wasserzeichen ist dann dort
+   kaum zu sehen. Betrifft nur Browser ohne Masken-Unterstuetzung. */
+@supports not ((-webkit-mask-image: url("")) or (mask-image: url(""))) {
+  body::before {
+    background: var(--board-src) var(--board-position) / var(--board-size) no-repeat;
+  }
+}
+
+/* Auf einen einzelnen Bereich begrenzen statt auf die ganze Seite,
+   z.B. Login-Karte oder Turnier-Header: <section class="board-bg"> */
+.board-bg {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.board-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: var(--board-ink);
+  -webkit-mask: var(--board-src) var(--board-position) / var(--board-size) no-repeat;
+          mask: var(--board-src) var(--board-position) / var(--board-size) no-repeat;
+  opacity: var(--board-opacity);
+}
+
+@media print {
+  body::before, .board-bg::before { display: none; }
+}

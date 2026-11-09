@@ -12,6 +12,7 @@ app.get('/', (_req, res) => {
   res.type('html').send(indexTemplate.replaceAll('__APP_VERSION__', appVersion));
 });
 
+app.use('/vendor/qrcode-generator', express.static(path.join(__dirname, '..', 'node_modules', 'qrcode-generator')));
 app.use(express.static(publicDirectory));
 
 app.listen(port, () => {
