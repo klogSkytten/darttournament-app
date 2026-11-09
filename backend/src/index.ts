@@ -1,6 +1,6 @@
 import express from 'express';
 import { config } from './config.js';
-import { bootstrapDatabase, database } from './database.js';
+import { bootstrapDatabase, database, resetDatabase } from './database.js';
 
 const app = express();
 
@@ -109,6 +109,27 @@ app.get('/api/ready', async (_req, res) => {
   }
 });
 
+app.get('/api/test-tools', (_req, res) => {
+  res.json({ databaseResetEnabled: config.enableTestDatabaseReset });
+});
+
+app.post('/api/test/reset-database', async (_req, res) => {
+  if (!config.enableTestDatabaseReset) {
+    return res.sendStatus(404);
+  }
+
+  try {
+    await resetDatabase();
+    return res.status(200).json({ ok: true, message: 'Test database cleared' });
+  } catch (error) {
+    console.error('Failed to reset test database:', error);
+    return res.status(500).json({
+      ok: false,
+      message: 'Could not reset test database',
+    });
+  }
+});
+
 app.get('/api', (_req, res) => {
   res.json({
     name: 'darttournament-backend',
@@ -132,7 +153,23 @@ app.get('/api/connectivity', (req, res) => {
 app.get('/api/tournaments', async (_req, res) => {
   try {
     const result = await database.query(
-      'SELECT * FROM tournaments ORDER BY created_at DESC',
+      `
+        SELECT
+          t.*,
+          to_char(t.tournament_date, 'YYYY-MM-DD') AS tournament_date,
+          CASE
+            WHEN winner_entry.team_id IS NOT NULL THEN winner_team.name
+            WHEN winner_entry.person_id IS NOT NULL
+              THEN concat_ws(' ', winner_person.first_name, winner_person.last_name)
+            ELSE NULL
+          END AS winner_name
+        FROM tournaments t
+        LEFT JOIN tournament_entries winner_entry
+          ON winner_entry.id = t.winner_tournament_entry_id
+        LEFT JOIN teams winner_team ON winner_team.id = winner_entry.team_id
+        LEFT JOIN persons winner_person ON winner_person.id = winner_entry.person_id
+        ORDER BY t.created_at DESC
+      `,
     );
 
     res.status(200).json({
@@ -151,7 +188,11 @@ app.get('/api/tournaments', async (_req, res) => {
 app.get('/api/tournaments/:id', async (req, res) => {
   try {
     const result = await database.query(
-      'SELECT * FROM tournaments WHERE id = $1',
+      `
+        SELECT *, to_char(tournament_date, 'YYYY-MM-DD') AS tournament_date
+        FROM tournaments
+        WHERE id = $1
+      `,
       [req.params.id],
     );
 
@@ -177,7 +218,7 @@ app.get('/api/tournaments/:id', async (req, res) => {
 
 app.post('/api/tournaments', async (req, res) => {
   try {
-    const { name, tournamentDate, description, status } = req.body ?? {};
+    const { name, tournamentDate, status } = req.body ?? {};
 
     if (typeof name !== 'string' || name.trim() === '') {
       return res.status(400).json({
@@ -190,11 +231,11 @@ app.post('/api/tournaments', async (req, res) => {
 
     const result = await database.query(
       `
-        INSERT INTO tournaments (name, tournament_date, description, status)
-        VALUES ($1, $2, $3, $4)
-        RETURNING *
+        INSERT INTO tournaments (name, tournament_date, status)
+        VALUES ($1, $2, $3)
+        RETURNING *, to_char(tournament_date, 'YYYY-MM-DD') AS tournament_date
       `,
-      [name.trim(), tournamentDate || null, description || null, normalizedStatus],
+      [name.trim(), tournamentDate || null, normalizedStatus],
     );
 
     return res.status(201).json({
@@ -206,6 +247,49 @@ app.post('/api/tournaments', async (req, res) => {
     return res.status(500).json({
       ok: false,
       message: 'Could not create tournament',
+    });
+  }
+});
+
+app.put('/api/tournaments/:id', async (req, res) => {
+  try {
+    const { name, tournamentDate } = req.body ?? {};
+
+    if (typeof name !== 'string' || name.trim() === '') {
+      return res.status(400).json({
+        ok: false,
+        message: 'Tournament name is required',
+      });
+    }
+
+    const result = await database.query(
+      `
+        UPDATE tournaments
+        SET name = $1,
+            tournament_date = $2,
+            updated_at = now()
+        WHERE id = $3
+        RETURNING *, to_char(tournament_date, 'YYYY-MM-DD') AS tournament_date
+      `,
+      [name.trim(), tournamentDate || null, req.params.id],
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        message: 'Tournament not found',
+      });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      data: result.rows[0],
+    });
+  } catch (error) {
+    console.error('Failed to update tournament:', error);
+    return res.status(500).json({
+      ok: false,
+      message: 'Could not update tournament',
     });
   }
 });

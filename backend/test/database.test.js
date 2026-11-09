@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { Pool } from 'pg';
-import { bootstrapDatabase, database } from '../dist/database.js';
+import { bootstrapDatabase, database, resetDatabase } from '../dist/database.js';
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 
@@ -50,6 +50,17 @@ test('database bootstrap is repeatable and enforces core relationships', {
         'tournaments',
       ].sort(),
     );
+    const tournamentColumns = await testPool.query(
+      `
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = 'tournaments'
+      `,
+      [schemaName],
+    );
+    const tournamentColumnNames = tournamentColumns.rows.map((row) => row.column_name);
+    assert.ok(tournamentColumnNames.includes('winner_tournament_entry_id'));
+    assert.ok(!tournamentColumnNames.includes('description'));
 
     const tournamentResult = await testPool.query(
       `INSERT INTO tournaments (name) VALUES ('Bootstrap test') RETURNING id`,
@@ -104,6 +115,10 @@ test('database bootstrap is repeatable and enforces core relationships', {
       [tournamentId, teamId],
     );
     const entryId = entryResult.rows[0].id;
+    await testPool.query(
+      'UPDATE tournaments SET winner_tournament_entry_id = $1 WHERE id = $2',
+      [entryId, tournamentId],
+    );
 
     const phaseResult = await testPool.query(
       `
@@ -197,10 +212,20 @@ test('database bootstrap is repeatable and enforces core relationships', {
 
     await bootstrapDatabase(testPool);
     const persistedTournament = await testPool.query(
-      'SELECT name, dartboard_count FROM tournaments WHERE id = $1',
+      'SELECT name, dartboard_count, winner_tournament_entry_id FROM tournaments WHERE id = $1',
       [tournamentId],
     );
-    assert.deepEqual(persistedTournament.rows, [{ name: 'Bootstrap test', dartboard_count: 0 }]);
+    assert.deepEqual(persistedTournament.rows, [{
+      name: 'Bootstrap test',
+      dartboard_count: 0,
+      winner_tournament_entry_id: entryId,
+    }]);
+
+    await resetDatabase(testPool);
+    const remainingTournaments = await testPool.query('SELECT count(*)::integer AS count FROM tournaments');
+    const remainingPersons = await testPool.query('SELECT count(*)::integer AS count FROM persons');
+    assert.equal(remainingTournaments.rows[0].count, 0);
+    assert.equal(remainingPersons.rows[0].count, 0);
 
     await adminPool.query(`CREATE SCHEMA "${upgradeSchemaName}"`);
     upgradePool = new Pool({
@@ -229,6 +254,15 @@ test('database bootstrap is repeatable and enforces core relationships', {
     assert.deepEqual(upgradedTournament.rows, [
       { name: 'Existing tournament', dartboard_count: 0 },
     ]);
+    const oldDescription = await upgradePool.query(
+      `
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = 'tournaments' AND column_name = 'description'
+      `,
+      [upgradeSchemaName],
+    );
+    assert.equal(oldDescription.rows.length, 0);
   } finally {
     if (testPool) {
       await testPool.end();

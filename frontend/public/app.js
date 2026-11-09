@@ -38,6 +38,7 @@ const state = {
   currentStep: 3,
   currentTournamentId: null,
   currentTournamentName: 'Neues Turnier',
+  currentTournamentDate: null,
   currentTournamentStatus: 'draft',
   drawGroups: null,
   drawBracketEntries: null,
@@ -172,7 +173,9 @@ function statusClass(status) {
 
 function formatDate(value) {
   if (!value) return 'noch offen';
-  const date = new Date(value);
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? new Date(`${value}T00:00:00`)
+    : new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat('de-DE', { dateStyle: 'medium' }).format(date);
 }
@@ -242,13 +245,16 @@ function stepHeading(section) {
 }
 
 function renderTournamentRow(tournament) {
+  const winner = tournament.status === 'finished'
+    ? `<span class="row-value row-winner"><span class="row-label">Sieger</span>${escapeHtml(tournament.winner_name || 'noch nicht festgelegt')}</span>`
+    : '<span class="row-winner"></span>';
   return `
     <article class="tournament-row">
       <strong class="tournament-name">${escapeHtml(tournament.name)}</strong>
       <span class="row-status"><span class="row-label">Status</span><span class="status-pill ${statusClass(tournament.status)}">${escapeHtml(statusLabel(tournament.status))}</span></span>
       <span class="row-value row-date"><span class="row-label">Datum</span>${escapeHtml(formatDate(tournament.tournament_date))}</span>
-      <span class="row-value row-description">${escapeHtml(tournament.description || 'keine Beschreibung')}</span>
-      <button class="row-open" type="button" data-open-tournament="${escapeHtml(tournament.id)}">öffnen <span aria-hidden="true">→</span></button>
+      ${winner}
+      <button class="row-open" type="button" data-open-tournament="${escapeHtml(tournament.id)}">öffnen</button>
     </article>`;
 }
 
@@ -400,11 +406,12 @@ function renderParticipantsStep(section) {
 
 function renderBasicsStep(section) {
   const today = new Date();
-  const defaultDate = [
+  const defaultDate = state.currentTournamentDate || [
     today.getFullYear(),
     String(today.getMonth() + 1).padStart(2, '0'),
     String(today.getDate()).padStart(2, '0')
   ].join('-');
+  const submitLabel = state.currentTournamentId ? 'Änderungen speichern' : 'Turnier anlegen';
   return `${stepHeading(section)}
     <div class="surface-inset form-section">
       <div class="form-section-header"><div><h2>Turnierdetails</h2><p class="subtle-copy">Diese Angaben kannst du später jederzeit anpassen.</p></div></div>
@@ -418,7 +425,7 @@ function renderBasicsStep(section) {
             <button class="logo-upload-control" type="button" disabled>Logo ändern</button>
           </div>
         </div>
-        <div class="tournament-actions"><div class="form-actions"><button class="button button-primary" type="submit">${state.currentTournamentId ? 'weiter zu Teilnehmer' : 'Turnier anlegen & weiter'} <span aria-hidden="true"></span></button></div></div>
+        <div class="tournament-actions"><div class="form-actions"><button class="button button-primary" type="submit">${submitLabel}</button></div></div>
       </form>
     </div>`;
 }
@@ -913,14 +920,15 @@ function renderBroadcastingStep(section) {
   const placementPhaseEnabled = state.configuration.placementPhaseEnabled !== false;
   const luckyLosersEnabled = state.configuration.luckyLosers !== false;
   const broadcastOptions = [
-    { id: 'broadcastWelcomeMessage', label: 'Willkommens-Nachricht', description: 'Zeigt eine Willkommensnachricht an.' },
-    { id: 'broadcastDraw', label: 'Auslosung', description: 'Streamt die Auslosung.' },
-    { id: 'broadcastNextMatches', label: 'Nächste Partien', description: 'Zeigt die Partien an, die als nächstes anstehen.', separated: true },
-    { id: 'broadcastCurrentMatches', label: 'Aktuelle Spiele', description: 'Zeigt den Zwischenstand der Partien, die gerade laufen, an.' },
-    { id: 'broadcastCurrentResults', label: 'Ergebnisse Gruppenphase', description: 'Zeigt die Ergebnisse der Gruppenphase an.', disabled: !groupPhaseEnabled },
-    { id: 'broadcastPlacementQualification', label: 'Endrunden-Qualifikation', description: 'Zeigt die Qualifikanten für die Endrunde an.', disabled: !groupPhaseEnabled || !placementPhaseEnabled },
-    { id: 'broadcastLuckyLosers', label: 'Ergebnisse Lucky Losers', description: 'Zeigt die Ergebnisse der Lucky Loosers an.', disabled: !luckyLosersEnabled },
-    { id: 'broadcastPlacementRound', label: 'Ergebnisse Endrunde', description: 'Zeigt die Ergebnisse der Endrunde an.', disabled: !placementPhaseEnabled }
+    { id: 'broadcastWelcomeMessage', label: 'Willkommens-Nachricht', description: 'Zeigt eine Willkommensnachricht.' },
+    { id: 'broadcastDraw', label: 'Auslosung', description: 'Zeigt die Auslosung.', separated: true },
+    { id: 'broadcastNextMatches', label: 'Nächste Partien', description: 'Zeigt die Partien, die als nächstes anstehen.', separated: true },
+    { id: 'broadcastCurrentMatches', label: 'Aktuelle Spiele', description: 'Zeigt den Zwischenstand der Partien, die gerade laufen.' },
+    { id: 'broadcastHighscores', label: 'Highscores', description: 'Zeigt die Highscores dieses Turniers.', disabled: !placementPhaseEnabled },
+    { id: 'broadcastCurrentResults', label: 'Ergebnisse Gruppenphase', description: 'Zeigt die Ergebnisse der Gruppenphase.', disabled: !groupPhaseEnabled, separated: true },
+    { id: 'broadcastPlacementQualification', label: 'Endrunden-Qualifikation', description: 'Zeigt die Qualifikanten für die Endrunde.', disabled: !groupPhaseEnabled || !placementPhaseEnabled },
+    { id: 'broadcastLuckyLosers', label: 'Ergebnisse Lucky Losers', description: 'Zeigt die Ergebnisse der Lucky Loosers.', disabled: !luckyLosersEnabled, separated: true },
+    { id: 'broadcastPlacementRound', label: 'Ergebnisse Endrunde', description: 'Zeigt die Ergebnisse der Endrunde.', disabled: !placementPhaseEnabled }
   ];
   return `${stepHeading(section)}
     <article class="surface-inset form-section broadcast-settings-card">
@@ -962,9 +970,12 @@ function renderStep() {
     10: renderResultsStep
   };
   stepContentElement.innerHTML = renderers[section.id](section);
-  document.querySelector('[data-step-previous]').disabled = section.id === 3;
-  document.querySelector('[data-step-next]').disabled = section.id === 3;
-  document.querySelector('[data-step-next]').textContent = section.id === 10 ? 'Übersicht' : 'weiter';
+  const sectionIndex = sectionDefinitions.findIndex((item) => item.id === section.id);
+  const previousButton = document.querySelector('[data-step-previous]');
+  const nextButton = document.querySelector('[data-step-next]');
+  previousButton.disabled = sectionIndex === 0;
+  nextButton.hidden = sectionIndex === sectionDefinitions.length - 1;
+  nextButton.textContent = 'weiter';
   updateWorkflowStatus();
   renderStepNavigation();
   bindStepActions();
@@ -1105,20 +1116,25 @@ function bindStepActions() {
       tournamentDate: formData.get('tournamentDate') || null,
       status: 'open'
     };
+    const isEditing = Boolean(state.currentTournamentId);
 
     try {
-      const result = await apiRequest('/api/tournaments', {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      });
-      const created = result.data;
-      state.currentTournamentId = created.id;
-      state.currentTournamentName = created.name;
-      state.currentTournamentStatus = created.status || 'open';
-      resetDraw();
-      showNotice('Turnier wurde angelegt.', 'success');
+      const result = await apiRequest(
+        isEditing
+          ? `/api/tournaments/${encodeURIComponent(state.currentTournamentId)}`
+          : '/api/tournaments',
+        {
+          method: isEditing ? 'PUT' : 'POST',
+          body: JSON.stringify(payload)
+        }
+      );
+      const tournament = result.data;
+      state.currentTournamentId = tournament.id;
+      state.currentTournamentName = tournament.name;
+      state.currentTournamentDate = tournament.tournament_date;
+      state.currentTournamentStatus = tournament.status || 'open';
+      showNotice(isEditing ? 'Änderungen wurden gespeichert.' : 'Turnier wurde angelegt.', 'success');
       await loadData();
-      setActiveView(4);
     } catch (error) {
       showNotice(error.message, 'error');
     }
@@ -1325,6 +1341,8 @@ async function loadData() {
     renderTournaments();
     const currentTournament = state.tournaments.find((item) => item.id === state.currentTournamentId);
     if (currentTournament) {
+      state.currentTournamentName = currentTournament.name;
+      state.currentTournamentDate = currentTournament.tournament_date;
       state.currentTournamentStatus = currentTournament.status || state.currentTournamentStatus;
       updateWorkflowStatus();
     }
@@ -1340,11 +1358,23 @@ async function loadData() {
   }
 }
 
+async function loadTestTools() {
+  const controls = document.getElementById('databaseResetControls');
+  try {
+    const result = await apiRequest('/api/test-tools');
+    controls.hidden = result.databaseResetEnabled !== true;
+  } catch (error) {
+    console.error('Could not load test tools:', error);
+    controls.hidden = true;
+  }
+}
+
 function openTournament(id) {
   const tournament = state.tournaments.find((item) => item.id === id);
   if (!tournament) return;
   state.currentTournamentId = tournament.id;
   state.currentTournamentName = tournament.name;
+  state.currentTournamentDate = tournament.tournament_date;
   state.currentTournamentStatus = tournament.status || 'draft';
   state.currentStep = 10;
   resetDraw();
@@ -1352,6 +1382,19 @@ function openTournament(id) {
 }
 
 document.addEventListener('click', (event) => {
+  const newTournamentControl = event.target.closest('[data-new-tournament]');
+  if (newTournamentControl) {
+    event.preventDefault();
+    state.currentTournamentId = null;
+    state.currentTournamentName = 'Neues Turnier';
+    state.currentTournamentDate = null;
+    state.currentTournamentStatus = 'draft';
+    state.currentStep = 3;
+    resetDraw();
+    setActiveView(3);
+    return;
+  }
+
   const viewControl = event.target.closest('[data-view]');
   if (viewControl) {
     event.preventDefault();
@@ -1366,15 +1409,41 @@ document.addEventListener('click', (event) => {
 });
 
 document.querySelector('[data-step-previous]').addEventListener('click', () => {
-  if (state.currentStep > 3) setActiveView(state.currentStep - 1);
+  const sectionIndex = sectionDefinitions.findIndex((section) => section.id === state.currentStep);
+  if (sectionIndex > 0) setActiveView(sectionDefinitions[sectionIndex - 1].id);
 });
 
 document.querySelector('[data-step-next]').addEventListener('click', () => {
-  if (state.currentStep < 10) setActiveView(state.currentStep + 1);
-  else setActiveView(1);
+  const sectionIndex = sectionDefinitions.findIndex((section) => section.id === state.currentStep);
+  if (sectionIndex >= 0 && sectionIndex < sectionDefinitions.length - 1) {
+    setActiveView(sectionDefinitions[sectionIndex + 1].id);
+  }
 });
 
 document.getElementById('refreshButton').addEventListener('click', loadData);
+
+document.getElementById('resetDatabaseButton').addEventListener('click', async () => {
+  if (!window.confirm('Alle Turniere, Personen, Teams und zugehörigen Daten werden endgültig gelöscht. Möchtest du die Testdatenbank wirklich leeren?')) {
+    return;
+  }
+
+  try {
+    await apiRequest('/api/test/reset-database', { method: 'POST' });
+    state.currentTournamentId = null;
+    state.currentTournamentName = 'Neues Turnier';
+    state.currentTournamentDate = null;
+    state.currentTournamentStatus = 'draft';
+    state.entries = [];
+    state.persons = [];
+    state.teams = [];
+    resetDraw();
+    setActiveView(1);
+    await loadData();
+    showNotice('Die Testdatenbank wurde geleert.', 'success');
+  } catch (error) {
+    showNotice(error.message, 'error');
+  }
+});
 
 document.getElementById('broadcastStatus').addEventListener('click', () => {
   if (!broadcastIsActive || document.getElementById('broadcastStatus').disabled) return;
@@ -1386,4 +1455,5 @@ renderStepNavigation();
 renderStep();
 renderTournaments();
 loadData();
+loadTestTools();
 window.setInterval(refreshHeaderStatuses, 15000);

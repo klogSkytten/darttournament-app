@@ -18,11 +18,13 @@ export async function bootstrapDatabase(pool: Pool = database): Promise<void> {
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         name TEXT NOT NULL CHECK (btrim(name) <> ''),
         tournament_date DATE,
-        description TEXT,
         status TEXT NOT NULL DEFAULT 'draft',
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+
+      ALTER TABLE tournaments
+        DROP COLUMN IF EXISTS description;
 
       ALTER TABLE tournaments
         ADD COLUMN IF NOT EXISTS dartboard_count INTEGER NOT NULL DEFAULT 0
@@ -69,6 +71,10 @@ export async function bootstrapDatabase(pool: Pool = database): Promise<void> {
       CREATE UNIQUE INDEX IF NOT EXISTS tournament_entries_team_unique
         ON tournament_entries (tournament_id, team_id)
         WHERE team_id IS NOT NULL;
+
+      ALTER TABLE tournaments
+        ADD COLUMN IF NOT EXISTS winner_tournament_entry_id UUID
+        REFERENCES tournament_entries(id) ON DELETE SET NULL;
 
       CREATE TABLE IF NOT EXISTS tournament_entry_members (
         tournament_id UUID NOT NULL,
@@ -345,6 +351,27 @@ export async function bootstrapDatabase(pool: Pool = database): Promise<void> {
       await client.query('ROLLBACK');
     } catch (rollbackError) {
       console.error('Failed to roll back database schema initialization:', rollbackError);
+    }
+
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function resetDatabase(pool: Pool = database): Promise<void> {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(827364827364)');
+    await client.query('TRUNCATE TABLE tournaments, persons, teams RESTART IDENTITY CASCADE');
+    await client.query('COMMIT');
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      console.error('Failed to roll back database reset:', rollbackError);
     }
 
     throw error;

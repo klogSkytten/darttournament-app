@@ -39,7 +39,8 @@ services:
       - wud.trigger.include=dockercompose.local
     environment:
       DATABASE_URL: ${DATABASE_URL}
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV:-production}
+      ENABLE_DATABASE_RESET: ${ENABLE_DATABASE_RESET:-false}
     networks:
       - proxy
       - database

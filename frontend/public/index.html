@@ -37,6 +37,7 @@
       </header>
 
       <main id="mainContent" class="main-content">
+        <div id="notice" class="notice alert alert-info" role="status" aria-live="polite"></div>
         <section class="view view-overview is-active" id="view-1" data-view-panel="1" aria-labelledby="overviewTitle">
           <div class="overview-heading">
             <div>
@@ -48,7 +49,7 @@
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" /><circle cx="12" cy="12" r="3" /></svg>
                 Einstellungen
               </button>
-              <button class="button button-primary" type="button" data-view="3">
+              <button class="button button-primary" type="button" data-view="3" data-new-tournament>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14" /><path d="M12 5v14" /></svg>
                 neues Turnier
               </button>
@@ -70,7 +71,7 @@
           <section class="surface tournament-surface" aria-labelledby="tournamentsHeading">
             <div class="surface-heading">
               <div>
-                <h2 id="tournamentsHeading">Deine Turniere</h2>
+                <h2 id="tournamentsHeading">Turniere</h2>
                 <p class="muted">Öffne ein Turnier, um die Verwaltung fortzusetzen.</p>
               </div>
               <button class="button button-small button-quiet" id="refreshButton" type="button">
@@ -82,7 +83,6 @@
               <div class="loading-state">Turniere werden geladen …</div>
             </div>
           </section>
-          <div id="notice" class="notice alert alert-info" role="status" aria-live="polite"></div>
         </section>
 
         <section class="view settings-view" id="view-2" data-view-panel="2" aria-labelledby="settingsTitle" hidden>
@@ -103,6 +103,13 @@
               <h2>Deine Vorgaben kommen bald</h2>
               <p>Diese Seite ist für allgemeine Standardwerte vorgesehen. Die konkreten Einstellungen werden in einem späteren Schritt festgelegt.</p>
               <button class="button button-primary" type="button" data-view="1">Zur Turnierübersicht</button>
+            </article>
+            <article class="surface database-reset-panel" id="databaseResetControls" hidden>
+              <div>
+                <h2>Testdaten</h2>
+                <p>Diese Funktion leert die Turnierdatenbank vollständig und ist ausschließlich für Entwicklungs- und Testzwecke vorgesehen.</p>
+              </div>
+              <button class="button button-danger" id="resetDatabaseButton" type="button">Datenbank zurücksetzen</button>
             </article>
           </div>
         </section>
@@ -160,7 +167,7 @@
         <img class="empty-logo" src="/logo-mark.svg?v=2" alt="" aria-hidden="true" />
         <h3>Hier ist noch Platz auf dem Board</h3>
         <p>Lege dein erstes Turnier an und bring alle an die Oche.</p>
-        <button class="button button-primary" type="button" data-view="3">Erstes Turnier anlegen <span aria-hidden="true">→</span></button>
+        <button class="button button-primary" type="button" data-view="3" data-new-tournament>Erstes Turnier anlegen <span aria-hidden="true">→</span></button>
       </div>
     </template>
   </body>
