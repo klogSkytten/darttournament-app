@@ -9,31 +9,11 @@ const sectionDefinitions = [
   { id: 10, short: 'Turnier starten', icon: '<path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z" />', title: 'Turnierstart & Ergebnisse', description: 'Starte das Turnier und behalte Begegnungen und Resultate im Blick.' }
 ];
 
-const demoEntries = [
-  { id: 'demo-single-1', person: { firstName: 'Lena', lastName: 'Fischer', nickname: 'Lenny', gender: 'w' } },
-  { id: 'demo-single-2', person: { firstName: 'Jonas', lastName: 'Weber', nickname: 'Joker', gender: 'm' } },
-  { id: 'demo-single-3', person: { firstName: 'Mia', lastName: 'Schmidt', nickname: 'Mighty', gender: 'w' } },
-  { id: 'demo-single-4', person: { firstName: 'Noah', lastName: 'Klein', nickname: '', gender: 'm' } },
-  { id: 'demo-single-5', person: { firstName: 'Emilia', lastName: 'Wagner', nickname: 'Em', gender: 'w' } },
-  { id: 'demo-single-6', person: { firstName: 'Ben', lastName: 'Becker', nickname: 'Bullseye', gender: 'm' } },
-  { id: 'demo-single-7', person: { firstName: 'Amira', lastName: 'Hoffmann', nickname: '', gender: 'w' } },
-  { id: 'demo-single-8', person: { firstName: 'Paul', lastName: 'Schulz', nickname: 'Double P', gender: 'm' } },
-  { id: 'demo-team-1', team: { name: 'Dartagnans', members: [{ name: 'Lena Fischer', gender: 'w' }, { name: 'Jonas Weber', gender: 'm' }] } },
-  { id: 'demo-team-2', team: { name: 'Mighty Arrows', members: [{ name: 'Mia Schmidt', gender: 'w' }, { name: 'Noah Klein', gender: 'm' }] } },
-  { id: 'demo-team-3', team: { name: 'Double Trouble', members: [{ name: 'Emilia Wagner', gender: 'w' }, { name: 'Ben Becker', gender: 'm' }] } },
-  { id: 'demo-team-4', team: { name: 'Bullseye Crew', members: [{ name: 'Amira Hoffmann', gender: 'w' }, { name: 'Paul Schulz', gender: 'm' }] } },
-  { id: 'demo-team-5', team: { name: 'Triple Twenty', members: [{ name: 'Lena Fischer', gender: 'w' }, { name: 'Mia Schmidt', gender: 'w' }] } },
-  { id: 'demo-team-6', team: { name: 'Checkout Kings', members: [{ name: 'Jonas Weber', gender: 'm' }, { name: 'Ben Becker', gender: 'm' }] } },
-  { id: 'demo-team-7', team: { name: 'Flight Club', members: [{ name: 'Emilia Wagner', gender: 'w' }, { name: 'Amira Hoffmann', gender: 'w' }] } },
-  { id: 'demo-team-8', team: { name: 'One Hundred Eighty', members: [{ name: 'Noah Klein', gender: 'm' }, { name: 'Paul Schulz', gender: 'm' }] } }
-];
-
 const state = {
   tournaments: [],
   persons: [],
   teams: [],
   entries: [],
-  demoEntries: [...demoEntries],
   activeView: 1,
   currentStep: 3,
   currentTournamentId: null,
@@ -254,7 +234,10 @@ function renderTournamentRow(tournament) {
       <span class="row-status"><span class="row-label">Status</span><span class="status-pill ${statusClass(tournament.status)}">${escapeHtml(statusLabel(tournament.status))}</span></span>
       <span class="row-value row-date"><span class="row-label">Datum</span>${escapeHtml(formatDate(tournament.tournament_date))}</span>
       ${winner}
-      <button class="row-open" type="button" data-open-tournament="${escapeHtml(tournament.id)}">öffnen</button>
+      <button class="row-open" type="button" data-open-tournament="${escapeHtml(tournament.id)}">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg>
+        öffnen
+      </button>
     </article>`;
 }
 
@@ -270,20 +253,25 @@ function renderTournaments() {
     list.innerHTML = document.getElementById('tournamentEmptyTemplate').innerHTML;
     return;
   }
-  list.innerHTML = state.tournaments.map(renderTournamentRow).join('');
-}
+  const statusOrder = { running: 0, open: 1, draft: 1, finished: 2 };
+  const sortedTournaments = [...state.tournaments].sort((left, right) => {
+    const statusDifference = (statusOrder[left.status] ?? 3) - (statusOrder[right.status] ?? 3);
+    if (statusDifference !== 0) return statusDifference;
 
-function entriesForDisplay() {
-  const entries = state.entries.filter((entry) => entry.tournament_id === state.currentTournamentId);
-  return entries.length ? entries : state.demoEntries;
+    const leftDate = left.tournament_date || '';
+    const rightDate = right.tournament_date || '';
+    if (!leftDate) return rightDate ? 1 : 0;
+    if (!rightDate) return -1;
+    return leftDate.localeCompare(rightDate);
+  });
+  list.innerHTML = sortedTournaments.map(renderTournamentRow).join('');
 }
 
 function renderEntryTiles() {
-  const entries = entriesForDisplay();
+  const entries = currentTournamentEntries();
   const { primaryColor, secondaryColor } = avatarThemeColors();
   if (!entries.length) return '<div class="table-empty">Für dieses Turnier sind noch keine Teilnehmer eingetragen.</div>';
   const tiles = entries.map((entry) => {
-    const isDemo = entry.id.startsWith('demo-');
     let name;
     let type;
     let avatar;
@@ -339,13 +327,10 @@ function renderEntryTiles() {
         secondaryColor
       });
     }
-    const deleteAttribute = isDemo
-      ? `data-demo-entry="${escapeHtml(entry.id)}"`
-      : `data-entry-delete="${escapeHtml(entry.id)}"`;
     return `<article class="participant-tile">
       <img class="participant-tile-avatar${type === 'Team' ? ' is-team' : ''}" src="${avatar}" alt="" aria-hidden="true">
       <div class="participant-tile-copy"><strong>${escapeHtml(name)}</strong></div>
-      <button class="participant-tile-remove" type="button" ${deleteAttribute} aria-label="${escapeHtml(name)} entfernen" title="Vom Turnier entfernen">x</button>
+      <button class="participant-tile-remove" type="button" data-entry-delete="${escapeHtml(entry.id)}" aria-label="${escapeHtml(name)} entfernen" title="Vom Turnier entfernen">x</button>
     </article>`;
   }).join('');
   return `<div class="participant-tiles">${tiles}</div>`;
@@ -399,7 +384,7 @@ function renderParticipantsStep(section) {
       </form>
     </div>
     <div class="surface-inset">
-      <div class="form-section-header"><div><h2>Turnierteilnehmer <span class="muted">(${entriesForDisplay().length})</span></h2></div></div>
+      <div class="form-section-header"><div><h2>Turnierteilnehmer <span class="muted">(${currentTournamentEntries().length})</span></h2></div></div>
       <div id="entriesList">${renderEntryTiles()}</div>
     </div>`;
 }
@@ -782,7 +767,7 @@ function renderDrawBracket(qualifierCount, directEntries = null, labelPrefix = '
 }
 
 function renderDrawStep(section) {
-  const entries = entriesForDisplay();
+  const entries = currentTournamentEntries();
   const configuredGroupCount = Number.parseInt(state.configuration.groupCount, 10);
   const groupCount = Number.isFinite(configuredGroupCount) && configuredGroupCount > 0
     ? configuredGroupCount
@@ -866,7 +851,7 @@ function renderClientsStep(section) {
       <article class="surface-inset board-settings-card">
         <div class="form-section-header"><div><h2>Dartboards</h2><p class="subtle-copy">Lege fest, mit wie vielen Dartboards dein Turnier stattfindet. Pro Board muss ein Client (z.B. Tablet oder Smartphone) verbunden werden.</p></div></div>
         <div class="board-setup-content">
-          <div class="field board-number"><label for="boardCount">Anzahl Dartboards</label><input id="boardCount" type="number" min="1" value="${escapeHtml(state.configuration.boardCount ?? '2')}" data-config></div>
+          <div class="field board-number"><label for="boardCount">Anzahl Dartboards</label><input id="boardCount" type="number" min="1" value="${escapeHtml(state.configuration.boardCount ?? '1')}" data-config></div>
           <div class="client-qr-panel">
             <div class="client-qr-code" id="clientQrCode" role="img" aria-label="QR-Code zur Client-Registrierung"></div>
             <div class="client-qr-copy"><a id="clientUrl" href="${escapeHtml(clientUrl)}">${escapeHtml(clientUrl)}</a></div>
@@ -921,21 +906,20 @@ function renderBroadcastingStep(section) {
   const luckyLosersEnabled = state.configuration.luckyLosers !== false;
   const broadcastOptions = [
     { id: 'broadcastWelcomeMessage', label: 'Willkommens-Nachricht', description: 'Zeigt eine Willkommensnachricht.' },
-    { id: 'broadcastDraw', label: 'Auslosung', description: 'Zeigt die Auslosung.', separated: true },
-    { id: 'broadcastNextMatches', label: 'Nächste Partien', description: 'Zeigt die Partien, die als nächstes anstehen.', separated: true },
+    { id: 'broadcastDraw', label: 'Auslosung', description: 'Zeigt die Auslosung.' },
+    { id: 'broadcastNextMatches', label: 'Nächste Partien', description: 'Zeigt die Partien, die als nächstes anstehen.' },
     { id: 'broadcastCurrentMatches', label: 'Aktuelle Spiele', description: 'Zeigt den Zwischenstand der Partien, die gerade laufen.' },
     { id: 'broadcastHighscores', label: 'Highscores', description: 'Zeigt die Highscores dieses Turniers.', disabled: !placementPhaseEnabled },
-    { id: 'broadcastCurrentResults', label: 'Ergebnisse Gruppenphase', description: 'Zeigt die Ergebnisse der Gruppenphase.', disabled: !groupPhaseEnabled, separated: true },
+    { id: 'broadcastCurrentResults', label: 'Ergebnisse Gruppenphase', description: 'Zeigt die Ergebnisse der Gruppenphase.', disabled: !groupPhaseEnabled },
     { id: 'broadcastPlacementQualification', label: 'Endrunden-Qualifikation', description: 'Zeigt die Qualifikanten für die Endrunde.', disabled: !groupPhaseEnabled || !placementPhaseEnabled },
-    { id: 'broadcastLuckyLosers', label: 'Ergebnisse Lucky Losers', description: 'Zeigt die Ergebnisse der Lucky Loosers.', disabled: !luckyLosersEnabled, separated: true },
+    { id: 'broadcastLuckyLosers', label: 'Ergebnisse Lucky Losers', description: 'Zeigt die Ergebnisse der Lucky Loosers.', disabled: !luckyLosersEnabled },
     { id: 'broadcastPlacementRound', label: 'Ergebnisse Endrunde', description: 'Zeigt die Ergebnisse der Endrunde.', disabled: !placementPhaseEnabled }
   ];
   return `${stepHeading(section)}
     <article class="surface-inset form-section broadcast-settings-card">
       <div class="form-section-header"></div>
       <div class="broadcast-options">
-        ${broadcastOptions.map(({ id, label, description, separated, disabled }) => `
-          ${separated ? '<div class="broadcast-divider" role="separator" aria-hidden="true"></div>' : ''}
+        ${broadcastOptions.map(({ id, label, description, disabled }) => `
           <div class="option-row">
             <div class="option-copy"><strong>${label}</strong><span>${description}</span></div>
             <label class="toggle" aria-label="${label} anzeigen"><input id="${id}" type="checkbox" data-config${disabled ? ' disabled' : ''} checked><span class="toggle-track"></span></label>
@@ -970,16 +954,28 @@ function renderStep() {
     10: renderResultsStep
   };
   stepContentElement.innerHTML = renderers[section.id](section);
-  const sectionIndex = sectionDefinitions.findIndex((item) => item.id === section.id);
-  const previousButton = document.querySelector('[data-step-previous]');
-  const nextButton = document.querySelector('[data-step-next]');
-  previousButton.disabled = sectionIndex === 0;
-  nextButton.hidden = sectionIndex === sectionDefinitions.length - 1;
-  nextButton.textContent = 'weiter';
+  updateTournamentMetrics();
+  updateStepControls();
   updateWorkflowStatus();
   renderStepNavigation();
   bindStepActions();
   renderClientQrCode();
+}
+
+function updateTournamentMetrics() {
+  const participantCount = document.getElementById('tournamentParticipantCount');
+  if (participantCount) participantCount.textContent = String(currentTournamentEntries().length);
+}
+
+function updateStepControls() {
+  const sectionIndex = sectionDefinitions.findIndex((item) => item.id === state.currentStep);
+  const previousButton = document.querySelector('[data-step-previous]');
+  const nextButton = document.querySelector('[data-step-next]');
+  previousButton.hidden = state.currentStep === 3;
+  previousButton.disabled = sectionIndex <= 0;
+  nextButton.hidden = sectionIndex === sectionDefinitions.length - 1;
+  nextButton.disabled = state.currentStep === 3 && state.currentTournamentStatus === 'draft';
+  nextButton.textContent = 'weiter';
 }
 
 function updateWorkflowStatus() {
@@ -1132,7 +1128,7 @@ function bindStepActions() {
       state.currentTournamentId = tournament.id;
       state.currentTournamentName = tournament.name;
       state.currentTournamentDate = tournament.tournament_date;
-      state.currentTournamentStatus = tournament.status || 'open';
+      state.currentTournamentStatus = tournament.status || 'draft';
       showNotice(isEditing ? 'Änderungen wurden gespeichert.' : 'Turnier wurde angelegt.', 'success');
       await loadData();
     } catch (error) {
@@ -1245,7 +1241,7 @@ function bindStepActions() {
       showNotice('Die Auslosung wurde zurückgesetzt.', 'success');
       return;
     }
-    const entries = entriesForDisplay();
+    const entries = currentTournamentEntries();
     if (!entries.length) {
       showNotice('Für die Auslosung werden Teilnehmer benötigt.', 'warning');
       return;
@@ -1294,14 +1290,6 @@ function bindStepActions() {
       }
     });
   });
-
-  stepContentElement.querySelectorAll('[data-demo-entry]').forEach((button) => {
-    button.addEventListener('click', () => {
-      state.demoEntries = state.demoEntries.filter((entry) => entry.id !== button.dataset.demoEntry);
-      resetDraw();
-      renderStep();
-    });
-  });
 }
 
 function validateGroupRanking() {
@@ -1345,10 +1333,12 @@ async function loadData() {
       state.currentTournamentDate = currentTournament.tournament_date;
       state.currentTournamentStatus = currentTournament.status || state.currentTournamentStatus;
       updateWorkflowStatus();
+      updateStepControls();
     }
     if (state.currentTournamentId && !state.tournaments.some((item) => item.id === state.currentTournamentId)) {
       state.currentTournamentId = null;
     }
+    updateTournamentMetrics();
     if (state.currentStep === 4 || state.currentStep === 7 || state.currentStep === 10) {
       renderStep();
     }
@@ -1376,9 +1366,9 @@ function openTournament(id) {
   state.currentTournamentName = tournament.name;
   state.currentTournamentDate = tournament.tournament_date;
   state.currentTournamentStatus = tournament.status || 'draft';
-  state.currentStep = 10;
+  state.currentStep = ['running', 'finished'].includes(state.currentTournamentStatus) ? 10 : 3;
   resetDraw();
-  setActiveView(10);
+  setActiveView(state.currentStep);
 }
 
 document.addEventListener('click', (event) => {

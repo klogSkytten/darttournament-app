@@ -11,6 +11,8 @@
   --muted: #64748b;
   --prime: #12355B;
   --sec: #D4AF37;
+  --sec-hover: #C9A227;
+  --tournament-action-max-width: 136px;
   --ink: #1E293B;
   --success: #22C55E;
   --warning: #F59E0B;
@@ -524,6 +526,11 @@ h1 {
 .status-pill.is-open::before { background: var(--warning); }
 
 .row-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  max-width: var(--tournament-action-max-width);
   min-height: 34px;
   padding: 0 11px;
   border: 0;
@@ -535,7 +542,9 @@ h1 {
   cursor: pointer;
 }
 
-.row-open:hover { background: #e7e2ff; }
+#refreshButton { max-width: var(--tournament-action-max-width); }
+.row-open svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.row-open:hover { background: var(--sec-hover); }
 
 .empty-state,
 .loading-state {
