@@ -6,6 +6,7 @@ exports.up = (pgm) => {
       tournament_date DATE,
       description TEXT,
       status TEXT NOT NULL DEFAULT 'draft',
+      participation_fee_enabled BOOLEAN NOT NULL DEFAULT true,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -107,12 +108,55 @@ exports.up = (pgm) => {
       BEFORE INSERT OR UPDATE ON tournament_entry_members
       FOR EACH ROW
       EXECUTE FUNCTION validate_tournament_entry_member();
+
+    CREATE FUNCTION create_tournament_entry_members()
+    RETURNS TRIGGER
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+      IF NEW.person_id IS NOT NULL THEN
+        INSERT INTO tournament_entry_members (tournament_id, tournament_entry_id, person_id)
+        VALUES (NEW.tournament_id, NEW.id, NEW.person_id);
+      ELSE
+        INSERT INTO tournament_entry_members (tournament_id, tournament_entry_id, person_id)
+        SELECT NEW.tournament_id, NEW.id, team_member.person_id
+        FROM teams
+        CROSS JOIN LATERAL (
+          VALUES (teams.member_low_person_id), (teams.member_high_person_id)
+        ) AS team_member(person_id)
+        WHERE teams.id = NEW.team_id;
+      END IF;
+      RETURN NEW;
+    END;
+    $$;
+
+    CREATE TRIGGER tournament_entry_members_after_insert
+      AFTER INSERT ON tournament_entries
+      FOR EACH ROW
+      EXECUTE FUNCTION create_tournament_entry_members();
+
+    INSERT INTO tournament_entry_members (tournament_id, tournament_entry_id, person_id)
+    SELECT members.tournament_id, members.tournament_entry_id, members.person_id
+    FROM (
+      SELECT te.tournament_id, te.id AS tournament_entry_id, te.person_id
+      FROM tournament_entries te
+      WHERE te.person_id IS NOT NULL
+      UNION ALL
+      SELECT te.tournament_id, te.id, team_member.person_id
+      FROM tournament_entries te
+      JOIN teams ON teams.id = te.team_id
+      CROSS JOIN LATERAL (
+        VALUES (teams.member_low_person_id), (teams.member_high_person_id)
+      ) AS team_member(person_id)
+    ) AS members;
   `);
 };
 
 exports.down = (pgm) => {
   pgm.sql(`
+    DROP TRIGGER tournament_entry_members_after_insert ON tournament_entries;
     DROP TABLE tournament_entry_members;
+    DROP FUNCTION create_tournament_entry_members();
     DROP FUNCTION validate_tournament_entry_member();
     DROP TABLE tournament_entries;
     DROP TABLE teams;
