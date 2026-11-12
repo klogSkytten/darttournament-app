@@ -89,6 +89,7 @@ textarea:focus-visible {
   justify-content: space-between;
 }
 .step-controls [hidden] { display: none; }
+.step-controls.is-first-step { justify-content: flex-end; }
 
 .topbar {
   padding: 0 34px;
@@ -482,7 +483,8 @@ h1 {
 
 .tournament-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1.25fr) minmax(100px, .65fr) minmax(100px, .55fr) minmax(160px, 1fr) auto;
+  grid-template-areas: "name date winner status action";
+  grid-template-columns: minmax(180px, 1fr) max-content minmax(0, 1fr) max-content max-content;
   align-items: center;
   gap: 16px;
   min-height: 66px;
@@ -492,9 +494,12 @@ h1 {
 
 .tournament-row:last-child { border-bottom: 0; }
 .tournament-row:hover { background: #fbfaff; }
-.tournament-name { overflow: hidden; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.tournament-name { grid-area: name; overflow: hidden; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .row-label { display: none; color: var(--muted); font-size: 10px; }
 .row-value { overflow: hidden; color: #475569; text-overflow: ellipsis; white-space: nowrap; }
+.row-date { grid-area: date; }
+.row-winner { grid-area: winner; }
+.row-status { grid-area: status; }
 .row-winner:empty { display: none; }
 
 .status-pill {
@@ -526,6 +531,7 @@ h1 {
 .status-pill.is-open::before { background: var(--warning); }
 
 .row-open {
+  grid-area: action;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -540,6 +546,7 @@ h1 {
   font-size: 11px;
   font-weight: 700;
   cursor: pointer;
+  justify-self: end;
 }
 
 #refreshButton { max-width: var(--tournament-action-max-width); }
@@ -833,12 +840,14 @@ body::before {
 .inline-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .person-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .person-form [hidden] { display: none !important; }
-.person-form .person-team-name,
-.person-form .team-preview-field { grid-column: auto; }
+.person-form .person-team-name { grid-column: auto; justify-content: flex-end; }
+.person-form .team-preview-field { grid-column: 1 / -1; }
+.participant-preview-field { justify-content: flex-end; }
 .participant-preview { display: flex; min-width: 0; align-items: center; gap: 9px; }
 .participant-preview img { width: 41px; height: 41px; flex: 0 0 41px; border-radius: 50%; }
 .team-preview-field .participant-preview img { width: 68px; flex-basis: 68px; }
 .participant-preview span { overflow: hidden; color: #334155; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.team-preview-field .participant-preview span { overflow-wrap: anywhere; white-space: normal; }
 .person-form .person-nickname { grid-column: 1 / -1; }
 .person-form .form-actions { grid-column: 1 / -1; }
 .form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; margin-top: 14px; }
@@ -884,6 +893,14 @@ body::before {
   cursor: pointer;
 }
 .participant-tile-remove:hover { background: #fee2e2; }
+.participation-fee-card .form-section-header { align-items: center; margin-bottom: 0; }
+.participation-fee-card.is-enabled .form-section-header { margin-bottom: 12px; }
+.participation-fee-badges { display: flex; flex-wrap: wrap; gap: 7px; }
+.participation-fee-badge { gap: 7px; border-color: var(--line); cursor: pointer; }
+.participation-fee-badge span { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+.participation-fee-badge svg { width: 14px; height: 14px; flex: 0 0 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.participation-fee-badge.is-paid { border-color: var(--success); background: #dcfce7; color: #15803d; }
+.participation-fee-badge:disabled { cursor: wait; opacity: .65; }
 .table-empty { padding: 13px 7px; color: #94a3b8; font-size: 11px; }
 .text-action { padding: 4px 6px; border: 0; border-radius: 6px; background: transparent; color: #b91c1c; font-size: 10px; font-weight: 700; cursor: pointer; }
 .text-action:hover { background: #fef2f2; }
@@ -961,6 +978,7 @@ body::before {
 .draw-participant-badges { display: flex; flex-wrap: wrap; gap: 7px; }
 .draw-participant-badges[hidden] { display: none; }
 .draw-player-badge { display: inline-flex; max-width: 100%; align-items: center; padding: 5px 9px; overflow: hidden; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-soft); color: var(--ink); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.draw-player-badge.is-disqualified { border-color: var(--error); background: #fee2e2; color: #b91c1c; }
 .draw-empty { color: var(--muted); font-size: 10px; }
 .draw-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 8px; }
 .draw-entries-panel .button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -1094,12 +1112,7 @@ body::before {
   .surface-heading p { max-width: 210px; font-size: 10px; line-height: 1.4; }
   .surface-heading .button { gap: 4px; padding: 0 8px; font-size: 10px; }
   .connection-state { padding: 7px 14px; font-size: 10px; }
-  .tournament-row { grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; min-height: 76px; padding: 10px 14px; }
-  .tournament-name { grid-column: 1; }
-  .row-status { grid-column: 2; grid-row: 1; }
-  .row-date { grid-column: 1; grid-row: 2; }
-  .row-winner:not(:empty) { grid-column: 1; grid-row: 3; }
-  .row-open { grid-column: 2; grid-row: 3; justify-self: end; }
+  .tournament-row { grid-template-areas: "name status" "date date" "winner winner" ". action"; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; min-height: 76px; padding: 10px 14px; }
   .row-label { display: inline; margin-right: 5px; }
   .status-pill { font-size: 9px; }
   .workflow-view { grid-template-columns: 1fr; grid-template-rows: 113px minmax(0, 1fr); }
@@ -1136,6 +1149,7 @@ body::before {
   .field-label { font-size: 10px; }
   .field input,
   .field select { min-height: 36px; padding: 7px 8px; font-size: 10px; }
+  .participant-preview-field .participant-preview { flex: 0 0 36px; min-height: 0; }
   .field textarea { min-height: 55px; padding: 7px 8px; font-size: 10px; }
   .surface-inset { padding: 11px; }
   .form-section-header { margin-bottom: 10px; }

@@ -20,6 +20,7 @@ const state = {
   currentTournamentName: 'Neues Turnier',
   currentTournamentDate: null,
   currentTournamentStatus: 'draft',
+  participationFeeEnabled: true,
   drawGroups: null,
   drawBracketEntries: null,
   clientConnections: [],
@@ -231,9 +232,9 @@ function renderTournamentRow(tournament) {
   return `
     <article class="tournament-row">
       <strong class="tournament-name">${escapeHtml(tournament.name)}</strong>
-      <span class="row-status"><span class="row-label">Status</span><span class="status-pill ${statusClass(tournament.status)}">${escapeHtml(statusLabel(tournament.status))}</span></span>
       <span class="row-value row-date"><span class="row-label">Datum</span>${escapeHtml(formatDate(tournament.tournament_date))}</span>
       ${winner}
+      <span class="row-status"><span class="row-label">Status</span><span class="status-pill ${statusClass(tournament.status)}">${escapeHtml(statusLabel(tournament.status))}</span></span>
       <button class="row-open" type="button" data-open-tournament="${escapeHtml(tournament.id)}">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg>
         öffnen
@@ -336,23 +337,167 @@ function renderEntryTiles() {
   return `<div class="participant-tiles">${tiles}</div>`;
 }
 
-function optionsForJoinableTeams() {
-  return state.teams
-    .map((team) => `<option value="${escapeHtml(team.id)}">${escapeHtml(team.name)}</option>`)
+function currentTournamentParticipants() {
+  const participants = new Map();
+  currentTournamentEntries().forEach((entry) => {
+    (entry.members || []).forEach((member) => participants.set(member.person_id, member));
+  });
+  return [...participants.values()].sort((left, right) =>
+    `${left.first_name} ${left.last_name}`.localeCompare(`${right.first_name} ${right.last_name}`, 'de')
+  );
+}
+
+function renderParticipationFeeBadge(person) {
+  const paid = person.participation_fee_paid === true;
+  const icon = paid
+    ? '<rect width="20" height="12" x="2" y="6" rx="2" /><circle cx="12" cy="12" r="2" /><path d="M6 12h.01M18 12h.01" /><path d="m16 19 2 2 4-4" />'
+    : '<rect width="20" height="12" x="2" y="6" rx="2" /><circle cx="12" cy="12" r="2" /><path d="M6 12h.01M18 12h.01" />';
+  return `<button class="draw-player-badge participation-fee-badge${paid ? ' is-paid' : ''}" type="button" data-participation-fee-person="${escapeHtml(person.person_id)}" data-paid="${paid}" aria-pressed="${paid}" aria-label="${paid ? 'Teilnahmegebühr bezahlt' : 'Teilnahmegebühr noch offen'}: ${escapeHtml(`${person.first_name} ${person.last_name}`)}" title="${paid ? 'Als nicht bezahlt markieren' : 'Als bezahlt markieren'}">
+    <span>${escapeHtml(`${person.first_name} ${person.last_name}`)}</span>
+    <svg viewBox="0 0 24 24" aria-hidden="true">${icon}</svg>
+  </button>`;
+}
+
+function renderParticipationFeeSection() {
+  const enabled = state.participationFeeEnabled;
+  const participants = currentTournamentParticipants();
+  return `<article class="surface-inset form-section participation-fee-card${enabled ? ' is-enabled' : ''}">
+    <div class="form-section-header">
+      <div><h2>Teilnahmegebühr</h2></div>
+      <label class="toggle" aria-label="Teilnahmegebühr aktivieren">
+        <input id="participationFeeEnabled" type="checkbox"${enabled ? ' checked' : ''}${state.currentTournamentId ? '' : ' disabled'}>
+        <span class="toggle-track"></span>
+      </label>
+    </div>
+    ${enabled ? `<div class="participation-fee-badges">
+      ${participants.length
+    ? participants.map(renderParticipationFeeBadge).join('')
+    : '<span class="table-empty">Für dieses Turnier sind noch keine Teilnehmer eingetragen.</span>'}
+    </div>` : ''}
+  </article>`;
+}
+
+function bindParticipationFeeActions(card) {
+  if (!card) return;
+  const toggle = card.querySelector('#participationFeeEnabled');
+  toggle?.addEventListener('change', async () => {
+    const tournamentId = state.currentTournamentId;
+    toggle.disabled = true;
+    try {
+      const result = await apiRequest(
+        `/api/tournaments/${encodeURIComponent(tournamentId)}/participation-fee`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ enabled: toggle.checked })
+        }
+      );
+      const tournament = state.tournaments.find((item) => item.id === tournamentId);
+      if (tournament) tournament.participation_fee_enabled = result.data.participation_fee_enabled;
+      if (state.currentTournamentId !== tournamentId) return;
+      state.participationFeeEnabled = result.data.participation_fee_enabled;
+      if (state.currentStep === 7) {
+        renderStep();
+        return;
+      }
+      if (state.currentStep !== 4 || !card.isConnected) return;
+      const template = document.createElement('template');
+      template.innerHTML = renderParticipationFeeSection();
+      const updatedCard = template.content.firstElementChild;
+      card.replaceWith(updatedCard);
+      bindParticipationFeeActions(updatedCard);
+    } catch (error) {
+      if (state.currentTournamentId === tournamentId) {
+        toggle.checked = state.participationFeeEnabled;
+        toggle.disabled = false;
+      }
+      showNotice(error.message, 'error');
+    }
+  });
+
+  card.addEventListener('click', async (event) => {
+    const badge = event.target.closest('[data-participation-fee-person]');
+    if (!badge || !card.contains(badge)) return;
+    const tournamentId = state.currentTournamentId;
+    const personId = badge.dataset.participationFeePerson;
+    const paid = badge.dataset.paid !== 'true';
+    badge.disabled = true;
+    try {
+      await apiRequest(
+        `/api/tournaments/${encodeURIComponent(tournamentId)}/participants/${encodeURIComponent(personId)}/fee`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ paid })
+        }
+      );
+      state.entries.filter((entry) => entry.tournament_id === tournamentId).forEach((entry) => {
+        const member = entry.members?.find((person) => person.person_id === personId);
+        if (member) member.participation_fee_paid = paid;
+      });
+      if (state.currentTournamentId !== tournamentId) return;
+      if (state.currentStep === 7) {
+        renderStep();
+        return;
+      }
+      if (state.currentStep !== 4 || !card.isConnected) return;
+      const participant = currentTournamentParticipants().find((person) => person.person_id === personId);
+      if (participant) badge.outerHTML = renderParticipationFeeBadge(participant);
+    } catch (error) {
+      if (state.currentTournamentId === tournamentId) badge.disabled = false;
+      showNotice(error.message, 'error');
+    }
+  });
+}
+
+function drawEntryBadge(entry) {
+  const currentEntry = state.entries.find((item) => item.id === entry.id) || entry;
+  const unpaid = state.participationFeeEnabled
+    && currentEntry.members?.some((member) => member.participation_fee_paid !== true);
+  return `<span class="draw-player-badge${unpaid ? ' is-disqualified' : ''}">${escapeHtml(drawEntryLabel(entry))}</span>`;
+}
+
+function tournamentTeamMemberIds() {
+  const teamIds = new Set(currentTournamentEntries().map((entry) => entry.team_id).filter(Boolean));
+  return new Set(state.teams
+    .filter((team) => teamIds.has(team.id))
+    .flatMap((team) => [team.member_low_person_id, team.member_high_person_id]));
+}
+
+function personOption(person) {
+  const label = `${person.first_name} ${person.last_name}${person.nickname ? ` (${person.nickname})` : ''}`;
+  return `<option value="${escapeHtml(person.id)}">${escapeHtml(label)}</option>`;
+}
+
+function optionsForUnregisteredParticipants() {
+  const registeredIds = new Set(currentTournamentEntries().map((entry) => entry.person_id).filter(Boolean));
+  const teamMemberIds = tournamentTeamMemberIds();
+  return state.persons
+    .filter((person) => !registeredIds.has(person.id) && !teamMemberIds.has(person.id))
+    .map(personOption)
     .join('');
 }
 
-function renderParticipantsStep(section) {
-  const participantOptions = state.persons.map((person) => {
-    const label = `${person.first_name} ${person.last_name}${person.nickname ? ` (${person.nickname})` : ''}`;
-    return `<option value="${escapeHtml(person.id)}">${escapeHtml(label)}</option>`;
-  }).join('');
+function optionsForTeamPartners(participantId) {
+  const teamMemberIds = tournamentTeamMemberIds();
+  return state.persons
+    .filter((person) => person.id !== participantId && !teamMemberIds.has(person.id))
+    .map(personOption)
+    .join('');
+}
 
+function teamForPersonPair(firstPersonId, secondPersonId) {
+  if (!firstPersonId || !secondPersonId) return null;
+  const [memberLowId, memberHighId] = [firstPersonId, secondPersonId].sort();
+  return state.teams.find((team) =>
+    team.member_low_person_id === memberLowId && team.member_high_person_id === memberHighId
+  ) || null;
+}
+
+function renderParticipantsStep(section) {
   return `${stepHeading(section)}
     <div class="form-section surface-inset">
       <div class="form-section-header"><div><h2>Teilnehmer auswählen oder anlegen</h2></div></div>
       <form id="personForm" class="inline-form person-form">
-        <div class="field"><label for="participantChoice">Teilnehmer auswählen</label><select id="participantChoice" name="participantChoice" required><option value="" selected> </option><option value="new">Teilnehmer anlegen</option>${participantOptions}</select></div>
+        <div class="field"><label for="participantChoice">Teilnehmer auswählen</label><select id="participantChoice" name="participantChoice" required><option value="" selected> </option><option value="new">Teilnehmer anlegen</option>${optionsForUnregisteredParticipants()}</select></div>
         <div class="field participant-preview-field" hidden>
           <!--span class="field-label"></span-->
           <div class="participant-preview" aria-live="polite">
@@ -371,7 +516,7 @@ function renderParticipantsStep(section) {
             <button class="logo-upload-control" type="button" disabled>Avatar ändern</button>
           </div>
         </div>
-        <div class="field person-team" hidden><label for="joinTeam">Team beitreten</label><select id="joinTeam" name="joinTeam"><option value="" selected> </option><option value="new">Team anlegen</option>${optionsForJoinableTeams()}</select></div>
+        <div class="field person-team" hidden><label for="joinTeam">Team bilden</label><span class="field-hint" id="teamPartnerHint">Bilde ein Team mit einem bestehenden Teilnehmer.</span><select id="joinTeam" name="joinTeam" aria-describedby="teamPartnerHint"><option value="" selected> </option></select></div>
         <div class="field person-team-name" hidden><label for="newTeamName">Teamname</label><input id="newTeamName" name="newTeamName"></div>
         <div class="field team-preview-field" hidden>
           <!--span class="field-label"></span-->
@@ -383,10 +528,11 @@ function renderParticipantsStep(section) {
         <div class="form-actions field full-width" hidden><button class="button button-primary" type="submit">zum Turnier hinzufügen</button></div>
       </form>
     </div>
-    <div class="surface-inset">
+    <div class="surface-inset form-section">
       <div class="form-section-header"><div><h2>Turnierteilnehmer <span class="muted">(${currentTournamentEntries().length})</span></h2></div></div>
       <div id="entriesList">${renderEntryTiles()}</div>
-    </div>`;
+    </div>
+    ${renderParticipationFeeSection()}`;
 }
 
 function renderBasicsStep(section) {
@@ -444,7 +590,7 @@ function radioOptions(name, label, options, selected, legacyName) {
 }
 
 function renderModeStep(section) {
-  const groupDefaults = { groupCount: 4, gamesPerPair: 1, qualifierCount: 16 };
+  const groupDefaults = { gamesPerPair: 1, qualifierCount: 16 };
   const participantCount = currentTournamentEntries().length;
   const maxQualifierCount = largestQualifierPower(participantCount);
   const configuredQualifierCount = Number(state.configuration.qualifierCount ?? groupDefaults.qualifierCount);
@@ -470,7 +616,7 @@ function renderModeStep(section) {
           </div>
         </div>
         <div class="group-settings">
-          ${groupNumberInput('groupCount', 'Gruppen', state.configuration.groupCount ?? groupDefaults.groupCount)}
+          ${groupNumberInput('groupCount', 'Gruppen', currentGroupCount())}
           ${groupNumberInput('gamesPerPair', 'Spiele gegeneinander', state.configuration.gamesPerPair ?? groupDefaults.gamesPerPair)}
           <div class="field" id="qualifierCountField">
             <label for="qualifierCount">Qualifikanten für Endrunde</label>
@@ -662,6 +808,14 @@ function currentTournamentEntries() {
   return state.entries.filter((entry) => entry.tournament_id === state.currentTournamentId);
 }
 
+function defaultGroupCount(participantCount) {
+  return Math.max(1, Math.floor(participantCount / 4));
+}
+
+function currentGroupCount() {
+  return Number(state.configuration.groupCount ?? defaultGroupCount(currentTournamentEntries().length));
+}
+
 function drawEntryLabel(entry) {
   if (entry.team) return entry.team.name;
   if (entry.person) return entry.person.nickname || entry.person.firstName || 'Teilnehmer';
@@ -768,17 +922,14 @@ function renderDrawBracket(qualifierCount, directEntries = null, labelPrefix = '
 
 function renderDrawStep(section) {
   const entries = currentTournamentEntries();
-  const configuredGroupCount = Number.parseInt(state.configuration.groupCount, 10);
-  const groupCount = Number.isFinite(configuredGroupCount) && configuredGroupCount > 0
-    ? configuredGroupCount
-    : 4;
+  const groupCount = currentGroupCount();
   const groupPhaseEnabled = state.configuration.groupPhaseEnabled !== false;
   if (groupPhaseEnabled && state.drawGroups && state.drawGroups.length !== groupCount) resetDraw();
   const groups = state.drawGroups || Array.from({ length: groupCount }, () => []);
   const groupCards = groups.map((players, index) => {
     const letter = String.fromCharCode(65 + (index % 26));
     const badges = players.length
-      ? players.map((entry) => `<span class="draw-player-badge">${escapeHtml(drawEntryLabel(entry))}</span>`).join('')
+      ? players.map(drawEntryBadge).join('')
       : '<span class="draw-empty"></span>';
     return `<article class="group-card"><h3><span class="group-letter">${letter}</span></h3><div class="group-players">${badges}</div></article>`;
   }).join('');
@@ -814,7 +965,7 @@ function renderDrawStep(section) {
         </div>
         <div class="draw-participant-badges"${drawn ? ' hidden' : ''}>
           ${entries.length
-    ? entries.map((entry) => `<span class="draw-player-badge">${escapeHtml(drawEntryLabel(entry))}</span>`).join('')
+    ? entries.map(drawEntryBadge).join('')
     : '<span class="draw-empty">Noch keine Teilnehmer eingetragen.</span>'}
         </div>
       </article>
@@ -962,9 +1113,13 @@ function renderStep() {
   renderClientQrCode();
 }
 
-function updateTournamentMetrics() {
+function updateTournamentMetrics(groupCount = currentGroupCount()) {
   const participantCount = document.getElementById('tournamentParticipantCount');
   if (participantCount) participantCount.textContent = String(currentTournamentEntries().length);
+  const groupBadge = document.getElementById('tournamentGroupCount');
+  if (groupBadge) groupBadge.textContent = groupCount === null
+    ? '– Gruppen'
+    : `${groupCount} ${groupCount === 1 ? 'Gruppe' : 'Gruppen'}`;
 }
 
 function updateStepControls() {
@@ -973,6 +1128,7 @@ function updateStepControls() {
   const nextButton = document.querySelector('[data-step-next]');
   previousButton.hidden = state.currentStep === 3;
   previousButton.disabled = sectionIndex <= 0;
+  document.querySelector('.step-controls').classList.toggle('is-first-step', state.currentStep === 3);
   nextButton.hidden = sectionIndex === sectionDefinitions.length - 1;
   nextButton.disabled = state.currentStep === 3 && state.currentTournamentStatus === 'draft';
   nextButton.textContent = 'weiter';
@@ -987,6 +1143,8 @@ function updateWorkflowStatus() {
 }
 
 function bindStepActions() {
+  bindParticipationFeeActions(stepContentElement.querySelector('.participation-fee-card'));
+
   const personAvatar = document.getElementById('personAvatar');
   const participantPreviewAvatar = document.getElementById('participantPreviewAvatar');
   const participantPreviewName = document.getElementById('participantPreviewName');
@@ -995,6 +1153,7 @@ function bindStepActions() {
   const personForm = document.getElementById('personForm');
   const participantChoice = document.getElementById('participantChoice');
   const joinTeam = document.getElementById('joinTeam');
+  const teamNameInput = document.getElementById('newTeamName');
   const firstName = document.getElementById('firstName');
   const lastName = document.getElementById('lastName');
   const nickname = document.getElementById('nickname');
@@ -1011,33 +1170,45 @@ function bindStepActions() {
     teamPreview: personForm?.querySelector('.team-preview-field'),
     actions: personForm?.querySelector('.form-actions')
   };
+  let teamPairKey = null;
+  let suggestedTeamName = '';
+  let teamNameEdited = false;
   const updateTeamMode = () => {
-    const selectedTeam = state.teams.find((team) => team.id === joinTeam?.value);
-    const isNewTeam = joinTeam?.value === 'new';
+    const selectedPartner = state.persons.find((person) => person.id === joinTeam?.value);
+    const selectedParticipant = state.persons.find((person) => person.id === participantChoice?.value);
+    const isNewParticipant = participantChoice?.value === 'new';
+    const selectedTeam = teamForPersonPair(selectedParticipant?.id, selectedPartner?.id);
     const { primaryColor, secondaryColor } = avatarThemeColors();
-    participantFields.teamName.hidden = !isNewTeam;
-    participantFields.teamPreview.hidden = !selectedTeam;
-    if (!selectedTeam || !window.Avatar) return;
+    const hasPartner = Boolean(selectedPartner);
+    const selectedFirstName = isNewParticipant ? firstName.value.trim() : selectedParticipant?.first_name || '';
+    const selectedLastName = isNewParticipant ? lastName.value.trim() : selectedParticipant?.last_name || '';
+    const selectedNickname = isNewParticipant ? nickname.value.trim() : selectedParticipant?.nickname || '';
+    const selectedGender = isNewParticipant ? gender.value : selectedParticipant?.gender;
+    const partnerDisplayName = selectedPartner
+      ? selectedPartner.nickname || `${selectedPartner.first_name} ${selectedPartner.last_name}`
+      : '';
+    const participantDisplayName = selectedNickname || `${selectedFirstName} ${selectedLastName}`.trim();
+    const defaultParticipantName = selectedNickname || selectedFirstName;
+    const defaultPartnerName = selectedPartner?.nickname || selectedPartner?.first_name || '';
+    const pairKey = `${selectedParticipant?.id || (isNewParticipant ? 'new' : '')}:${selectedPartner?.id || ''}`;
+    const pairChanged = pairKey !== teamPairKey;
+    if (pairChanged) teamNameEdited = false;
+    teamPairKey = pairKey;
+
+    participantFields.teamName.hidden = !hasPartner;
+    participantFields.teamPreview.hidden = !hasPartner;
+    teamNameInput.required = hasPartner;
+    suggestedTeamName = selectedTeam?.name || (hasPartner ? `${defaultParticipantName} | ${defaultPartnerName}` : '');
+    if (pairChanged || !teamNameEdited) teamNameInput.value = suggestedTeamName;
+    teamPreviewName.textContent = teamNameInput.value;
+    if (!hasPartner || !window.Avatar) return;
     const members = [
+      { name: participantDisplayName, gender: selectedGender },
       {
-        id: selectedTeam.member_low_person_id,
-        firstName: selectedTeam.low_first_name,
-        lastName: selectedTeam.low_last_name
-      },
-      {
-        id: selectedTeam.member_high_person_id,
-        firstName: selectedTeam.high_first_name,
-        lastName: selectedTeam.high_last_name
+        name: partnerDisplayName,
+        gender: selectedPartner.gender
       }
-    ].map((member) => {
-      const person = state.persons.find((item) => item.id === member.id);
-      const firstName = person?.first_name || member.firstName || '';
-      const lastName = person?.last_name || member.lastName || '';
-      return {
-        name: person?.nickname || `${firstName} ${lastName}`.trim(),
-        gender: person?.gender
-      };
-    });
+    ];
     teamPreviewAvatar.src = window.Avatar.teamUrl(members, {
       size: 41,
       layout: 'stack',
@@ -1045,8 +1216,7 @@ function bindStepActions() {
       primaryColor,
       secondaryColor
     });
-    teamPreviewAvatar.alt = `Avatare für ${selectedTeam.name}`;
-    teamPreviewName.textContent = selectedTeam.name;
+    teamPreviewAvatar.alt = `Avatare für ${members.map((member) => member.name).join(' und ')}`;
   };
   const updateParticipantMode = () => {
     if (!participantChoice) return;
@@ -1070,6 +1240,9 @@ function bindStepActions() {
       input.readOnly = Boolean(selectedPerson);
     });
     gender.disabled = Boolean(selectedPerson);
+    joinTeam.innerHTML = `<option value="" selected> </option>${optionsForTeamPartners(selectedPerson?.id)}`;
+    teamNameInput.value = '';
+    teamNameInput.required = false;
     updatePersonAvatar();
     updateTeamMode();
   };
@@ -1097,9 +1270,21 @@ function bindStepActions() {
   };
   participantChoice?.addEventListener('change', updateParticipantMode);
   joinTeam?.addEventListener('change', updateTeamMode);
+  teamNameInput?.addEventListener('input', () => {
+    teamNameEdited = teamNameInput.value !== suggestedTeamName;
+    teamPreviewName.textContent = teamNameInput.value;
+  });
   updateParticipantMode();
-  personForm?.addEventListener('input', updatePersonAvatar);
-  personForm?.addEventListener('change', updatePersonAvatar);
+  [firstName, lastName, nickname, gender].forEach((input) => {
+    input?.addEventListener('input', () => {
+      updatePersonAvatar();
+      updateTeamMode();
+    });
+    input?.addEventListener('change', () => {
+      updatePersonAvatar();
+      updateTeamMode();
+    });
+  });
   updatePersonAvatar();
 
   const tournamentForm = document.getElementById('tournamentForm');
@@ -1129,6 +1314,7 @@ function bindStepActions() {
       state.currentTournamentName = tournament.name;
       state.currentTournamentDate = tournament.tournament_date;
       state.currentTournamentStatus = tournament.status || 'draft';
+      state.participationFeeEnabled = tournament.participation_fee_enabled === true;
       showNotice(isEditing ? 'Änderungen wurden gespeichert.' : 'Turnier wurde angelegt.', 'success');
       await loadData();
     } catch (error) {
@@ -1140,35 +1326,48 @@ function bindStepActions() {
     event.preventDefault();
     const form = event.currentTarget;
     const formData = new FormData(form);
+    if (!state.currentTournamentId) {
+      showNotice('Bitte zuerst ein Turnier auswählen.', 'error');
+      return;
+    }
+
+    const selectedPerson = state.persons.find((person) => person.id === formData.get('participantChoice'));
+    const isNewPerson = formData.get('participantChoice') === 'new';
+    const teamPartnerId = formData.get('joinTeam') || null;
+    const payload = {
+      tournamentId: state.currentTournamentId,
+      ...(selectedPerson
+        ? { personId: selectedPerson.id }
+        : isNewPerson
+          ? {
+            newPerson: {
+              firstName: formData.get('firstName'),
+              lastName: formData.get('lastName'),
+              nickname: formData.get('nickname') || null,
+              gender: formData.get('gender')
+            }
+          }
+          : {}),
+      ...(teamPartnerId
+        ? { teamPartnerId, teamName: formData.get('newTeamName') }
+        : {})
+    };
+
     try {
-      const selectedPerson = state.persons.find((person) => person.id === formData.get('participantChoice'));
-      if (selectedPerson) {
-        const tournamentId = state.currentTournamentId;
-        if (!tournamentId) {
-          showNotice('Bitte zuerst ein Turnier auswählen.', 'error');
-          return;
-        }
-        await apiRequest('/api/tournament-entries', {
-          method: 'POST',
-          body: JSON.stringify({ tournamentId, personId: selectedPerson.id })
-        });
-        showNotice('Teilnehmer wurde zum Turnier hinzugefügt.', 'success');
-      } else {
-        await apiRequest('/api/persons', {
-          method: 'POST',
-          body: JSON.stringify({
-            firstName: formData.get('firstName'),
-            lastName: formData.get('lastName'),
-            nickname: formData.get('nickname') || null,
-            gender: formData.get('gender')
-          })
-        });
-        showNotice('Person wurde gespeichert.', 'success');
-      }
+      const result = await apiRequest('/api/tournament-participants', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
       resetDraw();
       form.reset();
       await loadData();
       renderStep();
+      showNotice(
+        result.data.team
+          ? `Team "${result.data.team.name}" wurde zum Turnier hinzugefügt.`
+          : 'Teilnehmer wurde zum Turnier hinzugefügt.',
+        'success'
+      );
     } catch (error) {
       showNotice(error.message, 'error');
     }
@@ -1181,10 +1380,21 @@ function bindStepActions() {
       else if (control.type === 'radio') control.checked = control.value === state.configuration[key];
       else control.value = state.configuration[key];
     }
+    if (key === 'groupCount') {
+      control.addEventListener('input', () => {
+        updateTournamentMetrics(control.validity.valid && control.value ? Number(control.value) : null);
+      });
+    }
     control.addEventListener('change', () => {
       const configKey = control.type === 'radio' ? control.name : control.id;
       if (!configKey || (control.type === 'radio' && !control.checked)) return;
       const previousGroupPhaseEnabled = state.configuration.groupPhaseEnabled !== false;
+      if (configKey === 'groupCount' && (!control.value || !control.validity.valid)) {
+        control.value = String(currentGroupCount());
+        updateTournamentMetrics();
+        showNotice('Bitte eine gültige Gruppenzahl ab 1 eingeben.', 'warning');
+        return;
+      }
       if (configKey === 'qualifierCount') {
         const previousValue = Number(state.configuration.qualifierCount);
         const nextValue = normalizeQualifierCount(
@@ -1197,7 +1407,10 @@ function bindStepActions() {
       } else {
         state.configuration[configKey] = control.type === 'checkbox' ? control.checked : control.value;
       }
-      if (configKey === 'groupCount') resetDraw();
+      if (configKey === 'groupCount') {
+        resetDraw();
+        updateTournamentMetrics();
+      }
       if (configKey === 'groupPhaseEnabled' && previousGroupPhaseEnabled !== state.configuration.groupPhaseEnabled) {
         const hadDraw = hasDraw();
         resetDraw();
@@ -1218,7 +1431,7 @@ function bindStepActions() {
   validateGroupRanking();
 
   document.querySelector('[data-reset-group]')?.addEventListener('click', () => {
-    const defaults = { groupCount: '4', gamesPerPair: '1', qualifierCount: '16' };
+    const defaults = { groupCount: String(defaultGroupCount(currentTournamentEntries().length)), gamesPerPair: '1', qualifierCount: '16' };
     Object.entries(defaults).forEach(([id, value]) => {
       const input = document.getElementById(id);
       if (!input) return;
@@ -1255,7 +1468,7 @@ function bindStepActions() {
       state.drawBracketEntries = createDirectBracketEntries(shuffledEntries);
       state.drawGroups = null;
     } else {
-      const groupCount = Math.max(1, Number.parseInt(state.configuration.groupCount, 10) || 4);
+      const groupCount = currentGroupCount();
       state.drawGroups = Array.from({ length: groupCount }, () => []);
       const groupBaseSize = Math.floor(shuffledEntries.length / groupCount);
       const extraGroupCount = shuffledEntries.length % groupCount;
@@ -1316,6 +1529,7 @@ function validateGroupRanking() {
 async function loadData() {
   refreshHeaderStatuses();
   try {
+    const previousEntryCount = currentTournamentEntries().length;
     const [tournaments, persons, teams, entries] = await Promise.all([
       apiRequest('/api/tournaments'),
       apiRequest('/api/persons'),
@@ -1326,20 +1540,27 @@ async function loadData() {
     state.persons = persons.data || [];
     state.teams = teams.data || [];
     state.entries = entries.data || [];
+    const entryCountChanged = previousEntryCount !== currentTournamentEntries().length;
+    if (entryCountChanged) {
+      delete state.configuration.groupCount;
+      resetDraw();
+    }
     renderTournaments();
     const currentTournament = state.tournaments.find((item) => item.id === state.currentTournamentId);
     if (currentTournament) {
       state.currentTournamentName = currentTournament.name;
       state.currentTournamentDate = currentTournament.tournament_date;
       state.currentTournamentStatus = currentTournament.status || state.currentTournamentStatus;
+      state.participationFeeEnabled = currentTournament.participation_fee_enabled === true;
       updateWorkflowStatus();
       updateStepControls();
     }
     if (state.currentTournamentId && !state.tournaments.some((item) => item.id === state.currentTournamentId)) {
       state.currentTournamentId = null;
+      state.participationFeeEnabled = true;
     }
     updateTournamentMetrics();
-    if (state.currentStep === 4 || state.currentStep === 7 || state.currentStep === 10) {
+    if (state.currentStep === 4 || state.currentStep === 7 || state.currentStep === 10 || (state.currentStep === 5 && entryCountChanged)) {
       renderStep();
     }
   } catch (error) {
@@ -1362,10 +1583,12 @@ async function loadTestTools() {
 function openTournament(id) {
   const tournament = state.tournaments.find((item) => item.id === id);
   if (!tournament) return;
+  if (state.currentTournamentId !== tournament.id) delete state.configuration.groupCount;
   state.currentTournamentId = tournament.id;
   state.currentTournamentName = tournament.name;
   state.currentTournamentDate = tournament.tournament_date;
   state.currentTournamentStatus = tournament.status || 'draft';
+  state.participationFeeEnabled = tournament.participation_fee_enabled === true;
   state.currentStep = ['running', 'finished'].includes(state.currentTournamentStatus) ? 10 : 3;
   resetDraw();
   setActiveView(state.currentStep);
@@ -1379,7 +1602,9 @@ document.addEventListener('click', (event) => {
     state.currentTournamentName = 'Neues Turnier';
     state.currentTournamentDate = null;
     state.currentTournamentStatus = 'draft';
+    state.participationFeeEnabled = true;
     state.currentStep = 3;
+    delete state.configuration.groupCount;
     resetDraw();
     setActiveView(3);
     return;
@@ -1423,9 +1648,11 @@ document.getElementById('resetDatabaseButton').addEventListener('click', async (
     state.currentTournamentName = 'Neues Turnier';
     state.currentTournamentDate = null;
     state.currentTournamentStatus = 'draft';
+    state.participationFeeEnabled = true;
     state.entries = [];
     state.persons = [];
     state.teams = [];
+    delete state.configuration.groupCount;
     resetDraw();
     setActiveView(1);
     await loadData();
