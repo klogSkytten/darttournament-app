@@ -30,6 +30,12 @@ export async function bootstrapDatabase(pool: Pool = database): Promise<void> {
         ADD COLUMN IF NOT EXISTS dartboard_count INTEGER NOT NULL DEFAULT 0
         CHECK (dartboard_count >= 0);
 
+      ALTER TABLE tournaments
+        ADD COLUMN IF NOT EXISTS participation_fee_enabled BOOLEAN NOT NULL DEFAULT true;
+
+      ALTER TABLE tournaments
+        ALTER COLUMN participation_fee_enabled SET DEFAULT true;
+
       CREATE TABLE IF NOT EXISTS persons (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         first_name TEXT NOT NULL CHECK (btrim(first_name) <> ''),
@@ -87,6 +93,9 @@ export async function bootstrapDatabase(pool: Pool = database): Promise<void> {
           REFERENCES tournament_entries (id, tournament_id)
           ON DELETE CASCADE
       );
+
+      ALTER TABLE tournament_entry_members
+        ADD COLUMN IF NOT EXISTS participation_fee_paid BOOLEAN NOT NULL DEFAULT false;
 
       CREATE TABLE IF NOT EXISTS tournament_phases (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -343,6 +352,51 @@ export async function bootstrapDatabase(pool: Pool = database): Promise<void> {
         BEFORE INSERT OR UPDATE ON tournament_entries
         FOR EACH ROW
         EXECUTE FUNCTION validate_tournament_entry_conflict();
+
+      CREATE OR REPLACE FUNCTION create_tournament_entry_members()
+      RETURNS TRIGGER
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        IF NEW.person_id IS NOT NULL THEN
+          INSERT INTO tournament_entry_members (tournament_id, tournament_entry_id, person_id)
+          VALUES (NEW.tournament_id, NEW.id, NEW.person_id)
+          ON CONFLICT (tournament_id, person_id) DO NOTHING;
+        ELSE
+          INSERT INTO tournament_entry_members (tournament_id, tournament_entry_id, person_id)
+          SELECT NEW.tournament_id, NEW.id, team_member.person_id
+          FROM teams
+          CROSS JOIN LATERAL (
+            VALUES (teams.member_low_person_id), (teams.member_high_person_id)
+          ) AS team_member(person_id)
+          WHERE teams.id = NEW.team_id
+          ON CONFLICT (tournament_id, person_id) DO NOTHING;
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+
+      DROP TRIGGER IF EXISTS tournament_entry_members_after_insert ON tournament_entries;
+      CREATE TRIGGER tournament_entry_members_after_insert
+        AFTER INSERT ON tournament_entries
+        FOR EACH ROW
+        EXECUTE FUNCTION create_tournament_entry_members();
+
+      INSERT INTO tournament_entry_members (tournament_id, tournament_entry_id, person_id)
+      SELECT members.tournament_id, members.tournament_entry_id, members.person_id
+      FROM (
+        SELECT te.tournament_id, te.id AS tournament_entry_id, te.person_id
+        FROM tournament_entries te
+        WHERE te.person_id IS NOT NULL
+        UNION ALL
+        SELECT te.tournament_id, te.id, team_member.person_id
+        FROM tournament_entries te
+        JOIN teams ON teams.id = te.team_id
+        CROSS JOIN LATERAL (
+          VALUES (teams.member_low_person_id), (teams.member_high_person_id)
+        ) AS team_member(person_id)
+      ) AS members
+      ON CONFLICT (tournament_id, person_id) DO NOTHING;
     `);
     await client.query('COMMIT');
     console.log('Database schema initialized.');

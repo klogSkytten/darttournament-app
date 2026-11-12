@@ -60,12 +60,14 @@ test('database bootstrap is repeatable and enforces core relationships', {
     );
     const tournamentColumnNames = tournamentColumns.rows.map((row) => row.column_name);
     assert.ok(tournamentColumnNames.includes('winner_tournament_entry_id'));
+    assert.ok(tournamentColumnNames.includes('participation_fee_enabled'));
     assert.ok(!tournamentColumnNames.includes('description'));
 
     const tournamentResult = await testPool.query(
-      `INSERT INTO tournaments (name) VALUES ('Bootstrap test') RETURNING id`,
+      `INSERT INTO tournaments (name) VALUES ('Bootstrap test') RETURNING id, participation_fee_enabled`,
     );
     const tournamentId = tournamentResult.rows[0].id;
+    assert.equal(tournamentResult.rows[0].participation_fee_enabled, true);
 
     const personResult = await testPool.query(`
       INSERT INTO persons (first_name, last_name, gender)
@@ -115,6 +117,15 @@ test('database bootstrap is repeatable and enforces core relationships', {
       [tournamentId, teamId],
     );
     const entryId = entryResult.rows[0].id;
+    const membership = await testPool.query(
+      'SELECT person_id FROM tournament_entry_members WHERE tournament_entry_id = $1 ORDER BY person_id',
+      [entryId],
+    );
+    assert.equal(membership.rows.length, 2);
+    await testPool.query(
+      'UPDATE tournament_entry_members SET participation_fee_paid = true WHERE tournament_entry_id = $1 AND person_id = $2',
+      [entryId, membership.rows[0].person_id],
+    );
     await testPool.query(
       'UPDATE tournaments SET winner_tournament_entry_id = $1 WHERE id = $2',
       [entryId, tournamentId],
@@ -211,15 +222,33 @@ test('database bootstrap is repeatable and enforces core relationships', {
     );
 
     await bootstrapDatabase(testPool);
+    await testPool.query(
+      'UPDATE tournaments SET participation_fee_enabled = false WHERE id = $1',
+      [tournamentId],
+    );
+    await testPool.query(
+      'ALTER TABLE tournaments ALTER COLUMN participation_fee_enabled SET DEFAULT false',
+    );
+    await bootstrapDatabase(testPool);
     const persistedTournament = await testPool.query(
-      'SELECT name, dartboard_count, winner_tournament_entry_id FROM tournaments WHERE id = $1',
+      'SELECT name, dartboard_count, winner_tournament_entry_id, participation_fee_enabled FROM tournaments WHERE id = $1',
       [tournamentId],
     );
     assert.deepEqual(persistedTournament.rows, [{
       name: 'Bootstrap test',
       dartboard_count: 0,
       winner_tournament_entry_id: entryId,
+      participation_fee_enabled: false,
     }]);
+    const newTournament = await testPool.query(
+      `INSERT INTO tournaments (name) VALUES ('Default fee setting test') RETURNING participation_fee_enabled`,
+    );
+    assert.equal(newTournament.rows[0].participation_fee_enabled, true);
+    const persistedFee = await testPool.query(
+      'SELECT participation_fee_paid FROM tournament_entry_members WHERE tournament_entry_id = $1 AND person_id = $2',
+      [entryId, membership.rows[0].person_id],
+    );
+    assert.equal(persistedFee.rows[0].participation_fee_paid, true);
 
     await resetDatabase(testPool);
     const remainingTournaments = await testPool.query('SELECT count(*)::integer AS count FROM tournaments');
@@ -239,6 +268,7 @@ test('database bootstrap is repeatable and enforces core relationships', {
         tournament_date DATE,
         description TEXT,
         status TEXT NOT NULL DEFAULT 'draft',
+        participation_fee_enabled BOOLEAN NOT NULL DEFAULT false,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )
@@ -248,12 +278,17 @@ test('database bootstrap is repeatable and enforces core relationships', {
     );
     await bootstrapDatabase(upgradePool);
     const upgradedTournament = await upgradePool.query(
-      'SELECT name, dartboard_count FROM tournaments WHERE id = $1',
+      'SELECT name, dartboard_count, participation_fee_enabled FROM tournaments WHERE id = $1',
       [existingTournament.rows[0].id],
     );
     assert.deepEqual(upgradedTournament.rows, [
-      { name: 'Existing tournament', dartboard_count: 0 },
+      { name: 'Existing tournament', dartboard_count: 0, participation_fee_enabled: false },
     ]);
+    const upgradeDefault = await upgradePool.query(
+      `SELECT column_default FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'tournaments' AND column_name = 'participation_fee_enabled'`,
+      [upgradeSchemaName],
+    );
+    assert.equal(upgradeDefault.rows[0].column_default, 'true');
     const oldDescription = await upgradePool.query(
       `
         SELECT 1
