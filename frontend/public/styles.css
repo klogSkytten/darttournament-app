@@ -1047,8 +1047,20 @@ body::before {
 .summary-chip { padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: white; }
 .summary-chip span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 9px; }
 .summary-chip strong { font-family: "Segoe UI", Arial, sans-serif; font-size: 17px; }
-.match-table { margin-top: 12px; }
+.match-table { display: grid; gap: 7px; margin: 12px 0 0; padding: 0; list-style: none; }
+.match-row { display: grid; grid-template-columns: 65px minmax(110px, .7fr) minmax(0, 1.8fr); align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+.match-number { color: var(--ink); font-size: 11px; font-weight: 700; }
+.match-phase { color: var(--muted); font-size: 10px; }
+.match-players { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px; color: var(--ink); font-size: 11px; font-weight: 600; }
+.match-players span { min-width: 0; overflow-wrap: anywhere; }
+.match-players span:last-child { text-align: right; }
+.match-versus { color: var(--muted); font-size: 10px; font-weight: 400; }
 .match-placeholder { display: grid; min-height: 102px; place-items: center; border: 1px dashed #cbd5e1; border-radius: 10px; color: var(--muted); font-size: 11px; text-align: center; }
+
+@media (max-width: 600px) {
+  .match-row { grid-template-columns: auto minmax(0, 1fr); gap: 5px 10px; }
+  .match-players { grid-column: 1 / -1; }
+}
 
 .bottombar {
   position: relative;

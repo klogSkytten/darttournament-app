@@ -590,10 +590,9 @@ function radioOptions(name, label, options, selected, legacyName) {
 }
 
 function renderModeStep(section) {
-  const groupDefaults = { gamesPerPair: 1, qualifierCount: 16 };
   const participantCount = currentTournamentEntries().length;
   const maxQualifierCount = largestQualifierPower(participantCount);
-  const configuredQualifierCount = Number(state.configuration.qualifierCount ?? groupDefaults.qualifierCount);
+  const configuredQualifierCount = Number(state.configuration.qualifierCount ?? Math.max(4, maxQualifierCount));
   const qualifierCount = maxQualifierCount >= 4
     ? largestQualifierPower(Math.min(configuredQualifierCount, maxQualifierCount)) || 4
     : 4;
@@ -617,11 +616,10 @@ function renderModeStep(section) {
         </div>
         <div class="group-settings">
           ${groupNumberInput('groupCount', 'Gruppen', currentGroupCount())}
-          ${groupNumberInput('gamesPerPair', 'Spiele gegeneinander', state.configuration.gamesPerPair ?? groupDefaults.gamesPerPair)}
+          ${groupNumberInput('gamesPerPair', 'Spiele gegeneinander', state.configuration.gamesPerPair ?? 1)}
           <div class="field" id="qualifierCountField">
             <label for="qualifierCount">Qualifikanten für Endrunde</label>
             <input id="qualifierCount" type="number" min="4" max="${Math.max(maxQualifierCount, 4)}" step="1" value="${qualifierCount}" data-config${maxQualifierCount < 4 ? ' disabled' : ''}>
-            ${maxQualifierCount < 4 ? '<span class="field-hint">Mindestens 4 Turnierteilnehmer sind erforderlich.</span>' : ''}
           </div>
         </div>
       </article>
@@ -675,8 +673,7 @@ function syncPhaseDependencies() {
     ?? true);
   const participantCount = currentTournamentEntries().length;
   const qualifierCount = Number(state.configuration.qualifierCount) || 4;
-  const disableLuckyLosers = !groupEnabled || (participantCount > 0
-    && (qualifierCount === participantCount || qualifierCount === participantCount - 1));
+  const disableLuckyLosers = !groupEnabled || participantCount - qualifierCount <= 1;
   const luckyToggle = root.querySelector('#luckyLosers');
 
   if (disableLuckyLosers) {
@@ -686,7 +683,7 @@ function syncPhaseDependencies() {
   if (luckyToggle) luckyToggle.disabled = disableLuckyLosers;
 
   const qualifierField = root.querySelector('#qualifierCountField');
-  if (qualifierField) qualifierField.hidden = !placementEnabled;
+  if (qualifierField) qualifierField.hidden = !placementEnabled && participantCount >= 4;
 
   root.querySelectorAll('.group-settings input').forEach((input) => {
     input.readOnly = !groupEnabled;
@@ -812,6 +809,19 @@ function defaultGroupCount(participantCount) {
   return Math.max(1, Math.floor(participantCount / 4));
 }
 
+function resetPhaseDefaults(participantCount) {
+  const qualifierCount = Math.max(4, largestQualifierPower(participantCount));
+  Object.assign(state.configuration, {
+    groupPhaseEnabled: true,
+    groupCount: String(defaultGroupCount(participantCount)),
+    gamesPerPair: '1',
+    qualifierCount: String(qualifierCount),
+    placementPhaseEnabled: participantCount >= 4,
+    placementGames: true,
+    luckyLosers: participantCount - qualifierCount > 1
+  });
+}
+
 function currentGroupCount() {
   return Number(state.configuration.groupCount ?? defaultGroupCount(currentTournamentEntries().length));
 }
@@ -843,6 +853,17 @@ function nextBracketSize(entryCount) {
   let size = 1;
   while (size < entryCount) size *= 2;
   return size;
+}
+
+function groupLabel(index) {
+  let number = index + 1;
+  let label = '';
+  while (number > 0) {
+    number -= 1;
+    label = String.fromCharCode(65 + number % 26) + label;
+    number = Math.floor(number / 26);
+  }
+  return label;
 }
 
 function createDirectBracketEntries(entries) {
@@ -927,7 +948,7 @@ function renderDrawStep(section) {
   if (groupPhaseEnabled && state.drawGroups && state.drawGroups.length !== groupCount) resetDraw();
   const groups = state.drawGroups || Array.from({ length: groupCount }, () => []);
   const groupCards = groups.map((players, index) => {
-    const letter = String.fromCharCode(65 + (index % 26));
+    const letter = groupLabel(index);
     const badges = players.length
       ? players.map(drawEntryBadge).join('')
       : '<span class="draw-empty"></span>';
@@ -1080,14 +1101,173 @@ function renderBroadcastingStep(section) {
     </article>`;
 }
 
+function groupRoundRobin(players) {
+  if (players.length < 2) return [];
+  const rotation = [...players];
+  if (rotation.length % 2 !== 0) rotation.push(null);
+  const rounds = [];
+  for (let round = 0; round < rotation.length - 1; round += 1) {
+    const matches = [];
+    for (let index = 0; index < rotation.length / 2; index += 1) {
+      const first = rotation[index];
+      const second = rotation[rotation.length - 1 - index];
+      if (first && second) matches.push([first, second]);
+    }
+    rounds.push(matches);
+    rotation.splice(1, 0, rotation.pop());
+  }
+  return rounds;
+}
+
+function addPlacementBracket(matches, phase, seeds, placementGames, firstRoundSlots = null) {
+  if (seeds.length < 2) return;
+  let brackets = [{ seeds, rank: 1, slots: firstRoundSlots }];
+  let round = 1;
+  while (brackets.length) {
+    const nextBrackets = [];
+    brackets.forEach((bracket) => {
+      if (bracket.seeds.length < 2) return;
+      const size = nextBracketSize(bracket.seeds.length);
+      const byeCount = size - bracket.seeds.length;
+      const slots = bracket.slots || [
+        ...bracket.seeds.slice(0, byeCount).flatMap((seed) => [seed, null]),
+        ...bracket.seeds.slice(byeCount)
+      ];
+      // Freilose rücken ohne Spiel weiter; Sieger und Verlierer bilden eigene Platzierungsraster.
+      const winners = [];
+      const losers = [];
+      for (let index = 0; index < slots.length; index += 2) {
+        const first = slots[index];
+        const second = slots[index + 1];
+        if (!first || !second) {
+          if (first || second) winners.push(first || second);
+          continue;
+        }
+        const isFinal = bracket.rank === 1 && bracket.seeds.length === 2;
+        const isThirdPlace = bracket.rank === 3 && bracket.seeds.length === 2;
+        const match = {
+          phase,
+          label: isFinal ? 'Finale' : isThirdPlace ? 'Spiel um Platz 3' : `Runde ${round}`,
+          first,
+          second
+        };
+        matches.push(match);
+        winners.push({ match, outcome: 'Sieger' });
+        if (placementGames) losers.push({ match, outcome: 'Verlierer' });
+      }
+      if (winners.length > 1) nextBrackets.push({ seeds: winners, rank: bracket.rank });
+      if (losers.length > 1) nextBrackets.push({ seeds: losers, rank: bracket.rank + size / 2 });
+    });
+    brackets = nextBrackets;
+    round += 1;
+  }
+}
+
+function buildMatchSchedule() {
+  const entries = currentTournamentEntries();
+  const participantCount = entries.length;
+  const groupEnabled = state.configuration.groupPhaseEnabled !== false;
+  const placementEnabled = state.configuration.placementPhaseEnabled === true;
+  const matches = [];
+  let groups = [];
+  if (groupEnabled) {
+    const count = currentGroupCount();
+    const baseSize = Math.floor(participantCount / count);
+    const extraGroups = participantCount % count;
+    groups = Array.from({ length: Math.min(count, participantCount) }, (_, index) => {
+      const size = baseSize + (index < extraGroups ? 1 : 0);
+      const label = groupLabel(index);
+      const drawn = state.drawGroups?.[index];
+      const players = Array.from({ length: size }, (_, playerIndex) =>
+        drawn ? drawEntryLabel(drawn[playerIndex]) : `${label}${playerIndex + 1}`
+      );
+      return { label, size, rounds: groupRoundRobin(players) };
+    });
+    const roundCount = Math.max(0, ...groups.map((group) => group.rounds.length));
+    const repetitions = Number(state.configuration.gamesPerPair);
+    for (let repetition = 0; repetition < repetitions; repetition += 1) {
+      for (let round = 0; round < roundCount; round += 1) {
+        groups.forEach((group) => {
+          (group.rounds[round] || []).forEach(([first, second]) => {
+            matches.push({ phase: 'Gruppenphase', label: `Gruppe ${group.label}`, first, second });
+          });
+        });
+      }
+    }
+  }
+
+  const qualifierCount = groupEnabled
+    ? Math.min(participantCount, Number(state.configuration.qualifierCount))
+    : participantCount;
+  let finalists;
+  let luckySeeds;
+  if (groupEnabled) {
+    const perGroup = groups.length
+      ? Math.min(Math.floor(qualifierCount / groups.length), ...groups.map((group) => group.size))
+      : 0;
+    finalists = Array.from({ length: perGroup }, (_, index) =>
+      groups.map((group) => `${index + 1}. Gruppe ${group.label}`)
+    ).flat();
+    const extraQualifiers = qualifierCount - finalists.length;
+    finalists.push(...Array.from({ length: extraQualifiers }, (_, index) => `Zusatz-Qualifikant ${index + 1}`));
+    luckySeeds = extraQualifiers
+      ? Array.from({ length: participantCount - qualifierCount }, (_, index) => `Lucky-Losers-Qualifikant ${index + 1}`)
+      : groups.flatMap((group) => Array.from(
+        { length: group.size - perGroup },
+        (_, index) => `${perGroup + index + 1}. Gruppe ${group.label}`
+      ));
+  } else {
+    finalists = Array.from({ length: participantCount }, (_, index) => `Teilnehmer ${index + 1}`);
+    luckySeeds = [];
+  }
+
+  if (groupEnabled && state.configuration.luckyLosers === true) {
+    addPlacementBracket(matches, 'Lucky Losers', luckySeeds, true);
+  }
+  if (placementEnabled) {
+    const slots = !groupEnabled && state.drawBracketEntries
+      ? state.drawBracketEntries.map((entry) => entry ? drawEntryLabel(entry) : null)
+      : null;
+    addPlacementBracket(matches, 'Endrunde', finalists, state.configuration.placementGames === true, slots);
+  }
+  const lastPhase = matches.some((match) => match.phase === 'Endrunde') ? 'Endrunde' : 'Lucky Losers';
+  const final = matches.find((match) => match.phase === lastPhase && match.label === 'Finale');
+  const thirdPlace = matches.find((match) => match.phase === lastPhase && match.label === 'Spiel um Platz 3');
+  const ordered = matches.filter((match) => match !== final && match !== thirdPlace);
+  if (thirdPlace) ordered.push(thirdPlace);
+  if (final) ordered.push(final);
+  ordered.forEach((match, index) => { match.number = index + 1; });
+  return ordered;
+}
+
+function renderMatchSchedule(matches) {
+  const label = (entry) => typeof entry === 'string'
+    ? entry
+    : `${entry.outcome} Spiel ${entry.match.number}`;
+  if (!matches.length) return '<div class="match-placeholder">Für die aktuellen Einstellungen sind keine Spiele vorgesehen.</div>';
+  return `<ol class="match-table" aria-label="Spielplan">${matches.map((match) => `
+    <li class="match-row">
+      <span class="match-number">Spiel ${match.number}</span>
+      <span class="match-phase">${escapeHtml(match.phase)} · ${escapeHtml(match.label)}</span>
+      <span class="match-players"><span>${escapeHtml(label(match.first))}</span><span class="match-versus">vs.</span><span>${escapeHtml(label(match.second))}</span></span>
+    </li>`).join('')}</ol>`;
+}
+
 function renderResultsStep(section) {
   const entryCount = currentTournamentEntries().length;
   const tournament = state.tournaments.find((item) => item.id === state.currentTournamentId);
   const readyToStart = entryCount === 16 && hasDraw();
+  const startMessage = !hasDraw()
+    ? 'Für den Start ist die Auslosung erforderlich!'
+    : readyToStart
+      ? 'Die Auslosung liegt vor. Der Turnierstart wird später mit dem Backend verbunden.'
+      : 'Der Turnierstart ist derzeit nur für 16 Teilnehmer vorbereitet.';
   return `${stepHeading(section)}
     <div class="surface-inset form-section">
-      <div class="form-section-header"><div><h2>Spielplan & Ergebnisse</h2><p class="subtle-copy">${readyToStart ? 'Alle Voraussetzungen für den Start sind erfüllt.' : 'Für den Start ist die Auslosung erforderlich!'}</p></div><button class="button button-primary" id="startTournamentButton" type="button" ${readyToStart ? '' : 'disabled'}>Turnier starten</button></div>
-      <div class="match-placeholder">${tournament ? 'Begegnungen und Ergebniserfassung werden mit der Turnier-API verbunden.' : 'Lege zuerst ein Turnier an, um Begegnungen und Ergebnisse zu verwalten.'}</div>
+      <div class="form-section-header"><div><h2>Spielplan & Ergebnisse</h2><p class="subtle-copy">${startMessage}</p></div><button class="button button-primary" id="startTournamentButton" type="button" ${readyToStart ? '' : 'disabled'}>Turnier starten</button></div>
+      ${tournament
+    ? `<p class="subtle-copy">Spielplan-Vorschau · Noch nicht gespeichert.</p>${renderMatchSchedule(buildMatchSchedule())}`
+    : '<div class="match-placeholder">Lege zuerst ein Turnier an, um Begegnungen und Ergebnisse zu verwalten.</div>'}
     </div>`;
 }
 
@@ -1105,21 +1285,117 @@ function renderStep() {
     10: renderResultsStep
   };
   stepContentElement.innerHTML = renderers[section.id](section);
-  updateTournamentMetrics();
   updateStepControls();
   updateWorkflowStatus();
   renderStepNavigation();
   bindStepActions();
+  updateTournamentMetrics();
   renderClientQrCode();
 }
 
-function updateTournamentMetrics(groupCount = currentGroupCount()) {
+function placementBracketMetrics(entryCount) {
+  if (entryCount < 2) return { games: 0, min: 0, max: 0 };
+  const bracketSize = nextBracketSize(entryCount);
+  const firstRoundGames = entryCount - bracketSize / 2;
+  const winners = placementBracketMetrics(bracketSize / 2);
+  const losers = placementBracketMetrics(firstRoundGames);
+  const hasBye = entryCount < bracketSize;
+  return {
+    games: firstRoundGames + winners.games + losers.games,
+    min: Math.min(winners.min + (hasBye ? 0 : 1), losers.min + 1),
+    max: Math.max(winners.max + 1, losers.max + 1)
+  };
+}
+
+function calculateTournamentMetrics(participantCount, groupCount, gamesPerPair, configuration) {
+  const groupEnabled = configuration.groupPhaseEnabled !== false;
+  const finalEnabled = configuration.placementPhaseEnabled === true;
+  const qualifiers = groupEnabled ? configuration.qualifierCount : participantCount;
+  const validQualifiers = qualifiers !== null;
+  const finalEntries = validQualifiers ? Math.min(participantCount, qualifiers) : null;
+  const luckyEntries = validQualifiers ? participantCount - finalEntries : null;
+  const luckyEnabled = groupEnabled && configuration.luckyLosers === true;
+
+  let groupGames = 0;
+  let groupMin = 0;
+  let groupMax = 0;
+  if (groupEnabled && participantCount > 0) {
+    if (groupCount === null || gamesPerPair === null) {
+      groupGames = groupMin = groupMax = null;
+    } else {
+      const smallSize = Math.floor(participantCount / groupCount);
+      const largeGroups = participantCount % groupCount;
+      const largeSize = smallSize + (largeGroups > 0 ? 1 : 0);
+      const gamesInGroup = (size) => size * (size - 1) / 2 * gamesPerPair;
+      groupGames = (groupCount - largeGroups) * gamesInGroup(smallSize)
+        + largeGroups * gamesInGroup(smallSize + 1);
+      groupMin = Math.max(0, smallSize - 1) * gamesPerPair;
+      groupMax = Math.max(0, largeSize - 1) * gamesPerPair;
+    }
+  }
+
+  let finalGames = 0;
+  let luckyGames = 0;
+  let min = groupMin;
+  let max = groupMax;
+  if (participantCount > 0) {
+    if (!validQualifiers) {
+      if (finalEnabled || luckyEnabled) min = max = null;
+      if (finalEnabled) finalGames = null;
+      if (luckyEnabled) luckyGames = null;
+    } else {
+      const final = finalEnabled
+        ? configuration.placementGames
+          ? placementBracketMetrics(finalEntries)
+          : {
+            games: Math.max(0, finalEntries - 1),
+            min: finalEntries >= 2 ? 1 : 0,
+            max: finalEntries >= 2 ? Math.ceil(Math.log2(finalEntries)) : 0
+          }
+        : { games: 0, min: 0, max: 0 };
+      const lucky = luckyEnabled ? placementBracketMetrics(luckyEntries) : { games: 0, min: 0, max: 0 };
+      finalGames = final.games;
+      luckyGames = lucky.games;
+      const routes = [];
+      if (finalEntries > 0) routes.push(final);
+      if (luckyEntries > 0) routes.push(lucky);
+      if (groupMin !== null) min = groupMin + Math.min(...routes.map((route) => route.min));
+      if (groupMax !== null) max = groupMax + Math.max(...routes.map((route) => route.max));
+    }
+  }
+  return { groupGames, finalGames, luckyGames, min, max };
+}
+
+function updateTournamentMetrics() {
+  const inputValue = (id, fallback, isValid = () => true) => {
+    const input = document.getElementById(id);
+    if (!input) return fallback;
+    const value = Number(input.value);
+    return input.value && input.validity.valid && isValid(value) ? value : null;
+  };
+  const groupCount = inputValue('groupCount', currentGroupCount());
+  const gamesPerPair = inputValue('gamesPerPair', Number(state.configuration.gamesPerPair));
+  const qualifierCount = inputValue('qualifierCount', Number(state.configuration.qualifierCount),
+    (value) => largestQualifierPower(value) === value);
+  const metrics = calculateTournamentMetrics(currentTournamentEntries().length, groupCount, gamesPerPair, {
+    ...state.configuration,
+    qualifierCount
+  });
+  const display = (value) => value === null ? '–' : String(value);
   const participantCount = document.getElementById('tournamentParticipantCount');
   if (participantCount) participantCount.textContent = String(currentTournamentEntries().length);
   const groupBadge = document.getElementById('tournamentGroupCount');
   if (groupBadge) groupBadge.textContent = groupCount === null
     ? '– Gruppen'
     : `${groupCount} ${groupCount === 1 ? 'Gruppe' : 'Gruppen'}`;
+  const gamesPerPlayer = document.getElementById('tournamentGamesPerPlayer');
+  if (gamesPerPlayer) gamesPerPlayer.textContent = `${display(metrics.min)}|${display(metrics.max)} Spiele/Spieler`;
+  const groupGames = document.getElementById('tournamentGroupGames');
+  if (groupGames) groupGames.textContent = display(metrics.groupGames);
+  const luckyGames = document.getElementById('tournamentLuckyGames');
+  if (luckyGames) luckyGames.textContent = display(metrics.luckyGames);
+  const finalGames = document.getElementById('tournamentFinalGames');
+  if (finalGames) finalGames.textContent = display(metrics.finalGames);
 }
 
 function updateStepControls() {
@@ -1380,10 +1656,8 @@ function bindStepActions() {
       else if (control.type === 'radio') control.checked = control.value === state.configuration[key];
       else control.value = state.configuration[key];
     }
-    if (key === 'groupCount') {
-      control.addEventListener('input', () => {
-        updateTournamentMetrics(control.validity.valid && control.value ? Number(control.value) : null);
-      });
+    if (['groupCount', 'gamesPerPair', 'qualifierCount'].includes(key)) {
+      control.addEventListener('input', updateTournamentMetrics);
     }
     control.addEventListener('change', () => {
       const configKey = control.type === 'radio' ? control.name : control.id;
@@ -1393,6 +1667,12 @@ function bindStepActions() {
         control.value = String(currentGroupCount());
         updateTournamentMetrics();
         showNotice('Bitte eine gültige Gruppenzahl ab 1 eingeben.', 'warning');
+        return;
+      }
+      if (configKey === 'gamesPerPair' && (!control.value || !control.validity.valid)) {
+        control.value = state.configuration.gamesPerPair;
+        updateTournamentMetrics();
+        showNotice('Bitte eine gültige Anzahl an Spielen ab 1 eingeben.', 'warning');
         return;
       }
       if (configKey === 'qualifierCount') {
@@ -1426,12 +1706,18 @@ function bindStepActions() {
       }
       if (control.matches('[id^="groupRanking-"]')) validateGroupRanking();
       syncPhaseDependencies();
+      updateTournamentMetrics();
     });
   });
   validateGroupRanking();
 
   document.querySelector('[data-reset-group]')?.addEventListener('click', () => {
-    const defaults = { groupCount: String(defaultGroupCount(currentTournamentEntries().length)), gamesPerPair: '1', qualifierCount: '16' };
+    const participantCount = currentTournamentEntries().length;
+    const defaults = {
+      groupCount: String(defaultGroupCount(participantCount)),
+      gamesPerPair: '1',
+      qualifierCount: String(Math.max(4, largestQualifierPower(participantCount)))
+    };
     Object.entries(defaults).forEach(([id, value]) => {
       const input = document.getElementById(id);
       if (!input) return;
@@ -1542,7 +1828,7 @@ async function loadData() {
     state.entries = entries.data || [];
     const entryCountChanged = previousEntryCount !== currentTournamentEntries().length;
     if (entryCountChanged) {
-      delete state.configuration.groupCount;
+      resetPhaseDefaults(currentTournamentEntries().length);
       resetDraw();
     }
     renderTournaments();
@@ -1558,6 +1844,7 @@ async function loadData() {
     if (state.currentTournamentId && !state.tournaments.some((item) => item.id === state.currentTournamentId)) {
       state.currentTournamentId = null;
       state.participationFeeEnabled = true;
+      resetPhaseDefaults(0);
     }
     updateTournamentMetrics();
     if (state.currentStep === 4 || state.currentStep === 7 || state.currentStep === 10 || (state.currentStep === 5 && entryCountChanged)) {
@@ -1583,8 +1870,9 @@ async function loadTestTools() {
 function openTournament(id) {
   const tournament = state.tournaments.find((item) => item.id === id);
   if (!tournament) return;
-  if (state.currentTournamentId !== tournament.id) delete state.configuration.groupCount;
+  const tournamentChanged = state.currentTournamentId !== tournament.id;
   state.currentTournamentId = tournament.id;
+  if (tournamentChanged) resetPhaseDefaults(currentTournamentEntries().length);
   state.currentTournamentName = tournament.name;
   state.currentTournamentDate = tournament.tournament_date;
   state.currentTournamentStatus = tournament.status || 'draft';
@@ -1604,7 +1892,7 @@ document.addEventListener('click', (event) => {
     state.currentTournamentStatus = 'draft';
     state.participationFeeEnabled = true;
     state.currentStep = 3;
-    delete state.configuration.groupCount;
+    resetPhaseDefaults(0);
     resetDraw();
     setActiveView(3);
     return;
@@ -1652,7 +1940,7 @@ document.getElementById('resetDatabaseButton').addEventListener('click', async (
     state.entries = [];
     state.persons = [];
     state.teams = [];
-    delete state.configuration.groupCount;
+    resetPhaseDefaults(0);
     resetDraw();
     setActiveView(1);
     await loadData();
@@ -1668,6 +1956,7 @@ document.getElementById('broadcastStatus').addEventListener('click', () => {
   if (!displayWindow) showNotice('Das Broadcasting-Fenster wurde vom Browser blockiert.', 'error');
 });
 
+resetPhaseDefaults(0);
 renderStepNavigation();
 renderStep();
 renderTournaments();

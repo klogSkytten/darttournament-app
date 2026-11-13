@@ -1,11 +1,11 @@
 {
   "name": "darttournament-frontend",
   "private": true,
-  "version": "0.1.6",
+  "version": "0.1.7",
   "scripts": {
     "dev": "node src/index.js",
     "start": "node src/index.js",
-    "test": "echo \"No tests yet\""
+    "test": "node --test"
   },
   "dependencies": {
     "express": "^4.19.2",
