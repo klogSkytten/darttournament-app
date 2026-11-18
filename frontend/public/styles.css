@@ -617,12 +617,71 @@ h1 {
 
 .settings-content {
   display: flex;
-  width: min(100%, 800px);
+  width: min(100%, 1120px);
   flex: 1;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   align-self: center;
-  padding-bottom: 48px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 32px;
+}
+
+.settings-content h1 { margin-top: 0; }
+.general-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 16px;
+  margin-top: 20px;
+}
+.settings-category { min-width: 0; padding: 20px; }
+.settings-category h2 { margin: 0 0 7px; font-size: 16px; }
+.settings-help { margin: 0 0 14px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.settings-field { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
+.settings-field label { color: #475569; font-size: 11px; font-weight: 600; }
+.settings-field input,
+.settings-field select {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+}
+.settings-field input:disabled,
+.settings-field select:disabled { background: #f1f5f9; color: #94a3b8; }
+.settings-person-fields,
+.settings-rule-grid,
+.settings-rule-fields,
+.settings-ranking-grid,
+.settings-timing-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.settings-person-fields { margin-top: 12px; }
+.settings-form { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px; }
+.settings-form .settings-category { grid-column: 1 / -1; }
+.settings-rules-category { grid-column: 1 / -1; }
+.settings-rule-card { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 11px; background: rgb(248 250 252 / 70%); }
+.settings-rule-card h3,
+.settings-ranking h3 { margin: 0 0 10px; font-size: 13px; }
+.settings-ranking { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.settings-ranking .settings-help { margin-bottom: 10px; }
+.settings-form-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+.settings-form .settings-category .settings-form-actions { margin-top: 16px; }
+.settings-category .button { min-height: 38px; }
+
+@media (max-width: 760px) {
+  .settings-content { width: 100%; }
+  .general-settings-grid,
+  .settings-form { grid-template-columns: minmax(0, 1fr); }
+  .settings-rules-category { grid-column: auto; }
+  .settings-category { padding: 16px; }
+  .settings-rule-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 420px) {
+  .settings-ranking-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 .settings-placeholder {

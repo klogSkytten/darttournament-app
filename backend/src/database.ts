@@ -1,5 +1,6 @@
 import { Pool } from 'pg';
 import { config } from './config.js';
+import { DEFAULT_GENERAL_SETTINGS } from './settings.js';
 
 export const database = new Pool({
   connectionString: config.databaseUrl,
@@ -20,6 +21,12 @@ export async function bootstrapDatabase(pool: Pool = database): Promise<void> {
         tournament_date DATE,
         status TEXT NOT NULL DEFAULT 'draft',
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS general_settings (
+        id SMALLINT PRIMARY KEY CHECK (id = 1),
+        settings JSONB NOT NULL CHECK (jsonb_typeof(settings) = 'object'),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
 
@@ -398,6 +405,10 @@ export async function bootstrapDatabase(pool: Pool = database): Promise<void> {
       ) AS members
       ON CONFLICT (tournament_id, person_id) DO NOTHING;
     `);
+    await client.query(
+      'INSERT INTO general_settings (id, settings) VALUES (1, $1::jsonb) ON CONFLICT (id) DO NOTHING',
+      [JSON.stringify(DEFAULT_GENERAL_SETTINGS)],
+    );
     await client.query('COMMIT');
     console.log('Database schema initialized.');
   } catch (error) {
@@ -405,6 +416,108 @@ export async function bootstrapDatabase(pool: Pool = database): Promise<void> {
       await client.query('ROLLBACK');
     } catch (rollbackError) {
       console.error('Failed to roll back database schema initialization:', rollbackError);
+    }
+
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function cleanupLocalData(pool: Pool = database): Promise<{
+  deletedTournaments: number;
+  deletedTeams: number;
+  deletedPersons: number;
+}> {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(827364827364)');
+    const tournaments = await client.query(
+      `
+        DELETE FROM tournaments
+        WHERE tournament_date < CURRENT_DATE
+          AND status IN ('draft', 'open')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM tournament_phases tp
+            WHERE tp.tournament_id = tournaments.id
+              AND (
+                tp.status IN ('in_progress', 'completed')
+                OR tp.started_at IS NOT NULL
+                OR tp.completed_at IS NOT NULL
+              )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM tournament_matches tm
+            WHERE tm.tournament_id = tournaments.id
+              AND (
+                tm.status IN ('in_progress', 'completed')
+                OR tm.started_at IS NOT NULL
+                OR tm.completed_at IS NOT NULL
+              )
+          )
+        RETURNING id
+      `,
+    );
+    const teams = await client.query(
+      `
+        DELETE FROM teams AS team
+        WHERE NOT EXISTS (
+          SELECT 1 FROM tournament_entries te WHERE te.team_id = team.id
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM tournament_match_participants tmp
+          JOIN tournament_matches tm ON tm.id = tmp.match_id
+          JOIN tournament_entries te ON te.id = tmp.tournament_entry_id
+          WHERE te.team_id = team.id
+            AND (
+              tm.status IN ('in_progress', 'completed')
+              OR tm.started_at IS NOT NULL
+              OR tm.completed_at IS NOT NULL
+            )
+        )
+        RETURNING id
+      `,
+    );
+    const persons = await client.query(
+      `
+        DELETE FROM persons AS person
+        WHERE NOT EXISTS (
+          SELECT 1 FROM tournament_entry_members tem WHERE tem.person_id = person.id
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM tournament_match_participants tmp
+          JOIN tournament_matches tm ON tm.id = tmp.match_id
+          JOIN tournament_entry_members tem
+            ON tem.tournament_entry_id = tmp.tournament_entry_id
+            AND tem.tournament_id = tmp.tournament_id
+          WHERE tem.person_id = person.id
+            AND (
+              tm.status IN ('in_progress', 'completed')
+              OR tm.started_at IS NOT NULL
+              OR tm.completed_at IS NOT NULL
+            )
+        )
+        RETURNING id
+      `,
+    );
+
+    await client.query('COMMIT');
+    return {
+      deletedTournaments: tournaments.rowCount ?? 0,
+      deletedTeams: teams.rowCount ?? 0,
+      deletedPersons: persons.rowCount ?? 0,
+    };
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      console.error('Failed to roll back local database cleanup:', rollbackError);
     }
 
     throw error;

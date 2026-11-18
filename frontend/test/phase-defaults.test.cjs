@@ -29,7 +29,23 @@ async function createApp() {
     '/api/tournaments': [],
     '/api/persons': [],
     '/api/teams': [],
-    '/api/tournament-entries': []
+    '/api/tournament-entries': [],
+    '/api/settings': {
+      rules: {
+        groupPhase: { startingScore: 301, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'single_out', bullOutRule: 'classic' },
+        groupRanking: ['placement', 'wins', 'leg_difference', 'three_dart_average'],
+        luckyLosers: { startingScore: 301, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'single_out', bullOutRule: 'classic' },
+        endRound: { startingScore: 301, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'single_out', bullOutRule: 'classic' },
+        endRoundSemifinal: { startingScore: 301, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'double_out', bullOutRule: 'classic' },
+        endRoundFinal: { startingScore: 501, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'double_out', bullOutRule: 'classic' }
+      },
+      timings: {
+        baseMinutesPerLeg: 5,
+        doubleInMasterInSurchargeMinutes: 3,
+        doubleOutMasterOutSurchargeMinutes: 3,
+        additionalMinutesPer200Points: 2
+      }
+    }
   };
   const context = vm.createContext({
     document: {
@@ -104,6 +120,38 @@ test('group count input is bounded by the number of groups with at least four pa
   }
 });
 
+test('rules step uses saved settings for phase and round presets', async () => {
+  const { context } = await createApp();
+  vm.runInContext(`
+    state.generalSettings.rules.groupPhase.startingScore = 501;
+    state.generalSettings.rules.groupRanking = ['wins', 'placement', 'leg_difference', 'three_dart_average'];
+    state.generalSettings.rules.endRoundFinal.startingScore = 701;
+  `, context);
+  const markup = vm.runInContext(`renderRulesStep({ id: 6, title: 'Regeln' })`, context);
+  assert.match(markup, /<select id="start-group" data-config><option>301<\/option><option selected>501<\/option>/);
+  assert.match(markup, /<select id="start-round-5" data-config><option selected>301<\/option>/);
+  assert.match(markup, /<select id="start-round-6" data-config><option>301<\/option><option>501<\/option><option selected>701<\/option>/);
+  assert.match(markup, /name="out-group" type="radio" value="Single Out" data-config checked/);
+  assert.match(markup, /name="out-round-5" type="radio" value="Double Out" data-config checked/);
+  assert.ok(markup.includes('id="groupRanking-0" data-config><option></option><option>Platzierung</option><option selected>Siege</option>'));
+});
+
+test('general settings view contains player, rule, timing, cleanup, and backup categories', async () => {
+  const { context } = await createApp();
+  const markup = vm.runInContext('renderGeneralSettingsContent()', context);
+  for (const category of [
+    'Benutzerverwaltung',
+    'Grund-Regeln',
+    'Spielzeiten',
+    'Lokale Datenbank bereinigen',
+    'Datenbank-Backup'
+  ]) {
+    assert.ok(markup.includes(category));
+  }
+  assert.ok(markup.includes('value="5" required'));
+  assert.ok(markup.includes('value="501"'));
+});
+
 test('reloading preserves manual settings unless the participant count changes', async () => {
   const { context, responses } = await createApp();
   const tournament = { id: 't1', name: 'Test', status: 'open' };
@@ -151,12 +199,17 @@ test('switching tournaments uses defaults for the selected tournament', async ()
     ];
     state.entries = Array.from({ length: 10 }, (_, id) => ({ id, tournament_id: 'b' }));
     openTournament('a');
+    state.configuration['start-group'] = '701';
+    state.configuration['groupRanking-0'] = 'Siege';
     state.configuration.gamesPerPair = '3';
     openTournament('b');
   `, context);
   assert.equal(vm.runInContext('state.configuration.gamesPerPair', context), '1');
   assert.equal(vm.runInContext('state.configuration.qualifierCount', context), '8');
   assert.equal(vm.runInContext('state.configuration.luckyLosers', context), true);
+  const ruleMarkup = vm.runInContext(`renderRulesStep({ id: 6, title: 'Regeln' })`, context);
+  assert.match(ruleMarkup, /<select id="start-group" data-config><option selected>301<\/option>/);
+  assert.match(ruleMarkup, /id="groupRanking-0" data-config><option><\/option><option selected>Platzierung<\/option>/);
 });
 
 test('placement brackets count real matches and player paths with byes', async () => {

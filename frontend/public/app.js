@@ -9,6 +9,39 @@ const sectionDefinitions = [
   { id: 10, short: 'Turnier starten', icon: '<path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z" />', title: 'Turnierstart & Ergebnisse', description: 'Starte das Turnier und behalte Begegnungen und Resultate im Blick.' }
 ];
 
+const DEFAULT_GENERAL_SETTINGS = {
+  rules: {
+    groupPhase: { startingScore: 301, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'single_out', bullOutRule: 'classic' },
+    groupRanking: ['placement', 'wins', 'leg_difference', 'three_dart_average'],
+    luckyLosers: { startingScore: 301, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'single_out', bullOutRule: 'classic' },
+    endRound: { startingScore: 301, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'single_out', bullOutRule: 'classic' },
+    endRoundSemifinal: { startingScore: 301, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'double_out', bullOutRule: 'classic' },
+    endRoundFinal: { startingScore: 501, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'double_out', bullOutRule: 'classic' }
+  },
+  timings: {
+    baseMinutesPerLeg: 5,
+    doubleInMasterInSurchargeMinutes: 3,
+    doubleOutMasterOutSurchargeMinutes: 3,
+    additionalMinutesPer200Points: 2
+  }
+};
+
+const ruleSelectOptions = {
+  startingScore: [['301', '301'], ['501', '501'], ['701', '701'], ['901', '901']],
+  setsToWin: [['1', '1'], ['2', '2'], ['3', '3'], ['4', '4']],
+  legsToWin: [['2', '2'], ['3', '3'], ['4', '4'], ['5', '5'], ['6', '6']],
+  startRule: [['single_in', 'Single In'], ['double_in', 'Double In'], ['master_in', 'Master In']],
+  checkoutRule: [['single_out', 'Single Out'], ['double_out', 'Double Out'], ['master_out', 'Master Out']],
+  bullOutRule: [['no_bullout', 'no Bull-Off'], ['classic', 'Classic Bull-Off'], ['pdc', 'PDC']]
+};
+
+const rankingOptionLabels = {
+  placement: 'Platzierung',
+  wins: 'Siege',
+  leg_difference: 'Leg-Differenz',
+  three_dart_average: '3-Dart-Average'
+};
+
 const state = {
   tournaments: [],
   persons: [],
@@ -21,6 +54,7 @@ const state = {
   currentTournamentDate: null,
   currentTournamentStatus: 'draft',
   participationFeeEnabled: true,
+  generalSettings: DEFAULT_GENERAL_SETTINGS,
   drawGroups: null,
   drawBracketEntries: null,
   clientConnections: [],
@@ -205,7 +239,313 @@ function setActiveView(viewId) {
     renderStepNavigation();
     document.getElementById('workflowTournamentName').textContent = state.currentTournamentName;
   }
+  if (state.activeView === 2) loadSettingsView();
   hideNotice();
+}
+
+function settingsSelect(name, label, value, options) {
+  return `
+    <div class="settings-field">
+      <label for="setting-${name}">${escapeHtml(label)}</label>
+      <select id="setting-${name}" data-setting="${escapeHtml(name)}">
+        ${options.map(([optionValue, optionLabel]) => `
+          <option value="${escapeHtml(optionValue)}"${String(value) === optionValue ? ' selected' : ''}>${escapeHtml(optionLabel)}</option>
+        `).join('')}
+      </select>
+    </div>
+  `;
+}
+
+function renderRulePresetCard(key, title) {
+  const preset = state.generalSettings.rules[key];
+  return `
+    <article class="settings-rule-card">
+      <h3>${escapeHtml(title)}</h3>
+      <div class="settings-rule-fields">
+        ${settingsSelect(`rules.${key}.startingScore`, 'Punkte', preset.startingScore, ruleSelectOptions.startingScore)}
+        ${settingsSelect(`rules.${key}.setsToWin`, 'Sets · First to', preset.setsToWin, ruleSelectOptions.setsToWin)}
+        ${settingsSelect(`rules.${key}.legsToWin`, 'Legs · First to', preset.legsToWin, ruleSelectOptions.legsToWin)}
+        ${settingsSelect(`rules.${key}.startRule`, 'Check In', preset.startRule, ruleSelectOptions.startRule)}
+        ${settingsSelect(`rules.${key}.checkoutRule`, 'Check Out', preset.checkoutRule, ruleSelectOptions.checkoutRule)}
+        ${settingsSelect(`rules.${key}.bullOutRule`, 'Bull-Off', preset.bullOutRule, ruleSelectOptions.bullOutRule)}
+      </div>
+    </article>
+  `;
+}
+
+function renderGeneralSettingsContent(selectedPersonId = '') {
+  const personOptions = state.persons.map((person) => {
+    const name = [person.first_name, person.last_name].filter(Boolean).join(' ');
+    const label = person.nickname ? `${name} (${person.nickname})` : name;
+    return `<option value="${escapeHtml(person.id)}"${person.id === selectedPersonId ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+  }).join('');
+  const rankingOptions = Object.entries(rankingOptionLabels)
+    .map(([value, label]) => [value, label]);
+  const timings = state.generalSettings.timings;
+
+  return `
+    <div class="general-settings-grid">
+      <article class="surface settings-category">
+        <h2>Benutzerverwaltung</h2>
+        <p class="settings-help">Wähle einen Spieler aus, um seine gespeicherten Daten zu bearbeiten.</p>
+        <form id="personSettingsForm">
+          <div class="settings-field">
+            <label for="settingsPersonSelect">Spieler</label>
+            <select id="settingsPersonSelect" ${state.persons.length ? '' : 'disabled'}>
+              <option value="">${state.persons.length ? 'Spieler auswählen …' : 'Noch keine Spieler vorhanden'}</option>
+              ${personOptions}
+            </select>
+          </div>
+          <div class="settings-person-fields">
+            <div class="settings-field">
+              <label for="settingsPersonFirstName">Vorname</label>
+              <input id="settingsPersonFirstName" name="firstName" autocomplete="given-name" required disabled>
+            </div>
+            <div class="settings-field">
+              <label for="settingsPersonLastName">Nachname</label>
+              <input id="settingsPersonLastName" name="lastName" autocomplete="family-name" required disabled>
+            </div>
+            <div class="settings-field">
+              <label for="settingsPersonNickname">Spitzname</label>
+              <input id="settingsPersonNickname" name="nickname" disabled>
+            </div>
+            <div class="settings-field">
+              <label for="settingsPersonGender">Geschlecht</label>
+              <select id="settingsPersonGender" name="gender" required disabled>
+                <option value="m">Männlich</option>
+                <option value="w">Weiblich</option>
+              </select>
+            </div>
+          </div>
+          <div class="settings-form-actions">
+            <button class="button button-primary" type="submit" id="savePersonSettingsButton" disabled>Spielerdaten speichern</button>
+          </div>
+        </form>
+      </article>
+
+      <article class="surface settings-category">
+        <h2>Lokale Datenbank bereinigen</h2>
+        <p class="settings-help">Löscht vergangene, noch nicht begonnene Turniere sowie nicht angemeldete Spieler und Teams ohne gespielte Partien. Diese Aktion kann nicht rückgängig gemacht werden.</p>
+        <button class="button button-danger" id="cleanupLocalDatabaseButton" type="button">Datenbank bereinigen</button>
+      </article>
+
+      <form class="settings-form" id="generalSettingsForm">
+        <section class="surface settings-category settings-rules-category">
+          <h2>Grund-Regeln</h2>
+          <p class="settings-help">Diese Standardwerte werden beim Anlegen eines Turniers vorausgewählt.</p>
+          <div class="settings-rule-grid">
+            ${renderRulePresetCard('groupPhase', 'Gruppenphase')}
+            ${renderRulePresetCard('luckyLosers', 'Lucky Losers')}
+            ${renderRulePresetCard('endRound', 'Endrunde')}
+            ${renderRulePresetCard('endRoundSemifinal', 'Endrunde · Halbfinale')}
+            ${renderRulePresetCard('endRoundFinal', 'Endrunde · Finale')}
+          </div>
+          <div class="settings-ranking">
+            <h3>Gruppenwertung</h3>
+            <p class="settings-help">Reihenfolge der Kriterien für die Gruppenplatzierung.</p>
+            <div class="settings-ranking-grid">
+              ${state.generalSettings.rules.groupRanking.map((criterion, index) => `
+                <div class="settings-field">
+                  <label for="settingsGroupRanking-${index}">${index + 1}. Kriterium</label>
+                  <select id="settingsGroupRanking-${index}" data-ranking-index="${index}">
+                    ${settingsSelectOptions(rankingOptions, criterion)}
+                  </select>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </section>
+
+        <section class="surface settings-category">
+          <h2>Spielzeiten</h2>
+          <p class="settings-help">Zusätzliche Minuten werden zur Grundzeit pro Leg addiert.</p>
+          <div class="settings-timing-grid">
+            ${settingsNumberInput('timings.baseMinutesPerLeg', 'Minuten pro Leg (301 Single In/Out)', timings.baseMinutesPerLeg, 1)}
+            ${settingsNumberInput('timings.doubleInMasterInSurchargeMinutes', 'Aufschlag Double In / Master In', timings.doubleInMasterInSurchargeMinutes)}
+            ${settingsNumberInput('timings.doubleOutMasterOutSurchargeMinutes', 'Aufschlag Double Out / Master Out', timings.doubleOutMasterOutSurchargeMinutes)}
+            ${settingsNumberInput('timings.additionalMinutesPer200Points', 'Aufschlag je 200 Punkte mehr', timings.additionalMinutesPer200Points)}
+          </div>
+          <div class="settings-form-actions">
+            <button class="button button-primary" type="submit">Grund-Regeln und Spielzeiten speichern</button>
+          </div>
+        </section>
+      </form>
+
+      <article class="surface settings-category">
+        <h2>Datenbank-Backup</h2>
+        <p class="settings-help">Die Eingabe von URL und Port für ein externes Backup wird zu einem späteren Zeitpunkt ergänzt.</p>
+      </article>
+    </div>
+  `;
+}
+
+function settingsSelectOptions(options, selected) {
+  return options.map(([value, label]) => `
+    <option value="${escapeHtml(value)}"${value === selected ? ' selected' : ''}>${escapeHtml(label)}</option>
+  `).join('');
+}
+
+function settingsNumberInput(name, label, value, min = 0) {
+  return `
+    <div class="settings-field">
+      <label for="setting-${name}">${escapeHtml(label)}</label>
+      <input id="setting-${name}" data-setting="${escapeHtml(name)}" type="number" min="${min}" step="1" value="${value}" required>
+    </div>
+  `;
+}
+
+function bindGeneralSettingsForms(root) {
+  const personForm = root.querySelector('#personSettingsForm');
+  const personSelect = root.querySelector('#settingsPersonSelect');
+  const personFields = [
+    root.querySelector('#settingsPersonFirstName'),
+    root.querySelector('#settingsPersonLastName'),
+    root.querySelector('#settingsPersonNickname'),
+    root.querySelector('#settingsPersonGender')
+  ];
+  const savePersonButton = root.querySelector('#savePersonSettingsButton');
+  const setPersonFields = () => {
+    const person = state.persons.find((item) => item.id === personSelect.value);
+    personFields.forEach((field) => {
+      field.disabled = !person;
+      if (!person) field.value = '';
+    });
+    savePersonButton.disabled = !person;
+    if (!person) return;
+    personFields[0].value = person.first_name;
+    personFields[1].value = person.last_name;
+    personFields[2].value = person.nickname || '';
+    personFields[3].value = person.gender;
+  };
+  personSelect.addEventListener('change', setPersonFields);
+  setPersonFields();
+
+  personForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const personId = personSelect.value;
+    if (!personId) return;
+    const payload = {
+      firstName: personFields[0].value,
+      lastName: personFields[1].value,
+      nickname: personFields[2].value,
+      gender: personFields[3].value
+    };
+    try {
+      const result = await apiRequest(`/api/persons/${encodeURIComponent(personId)}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+      });
+      state.persons = state.persons.map((person) => person.id === personId ? result.data : person);
+      renderSettingsView(personId);
+      showNotice('Die Spielerdaten wurden gespeichert.', 'success');
+    } catch (error) {
+      showNotice(error.message, 'error');
+    }
+  });
+
+  const settingsForm = root.querySelector('#generalSettingsForm');
+  settingsForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const getValue = (name) => settingsForm.querySelector(`[data-setting="${name}"]`).value;
+    const getRule = (key) => ({
+      startingScore: Number(getValue(`rules.${key}.startingScore`)),
+      setsToWin: Number(getValue(`rules.${key}.setsToWin`)),
+      legsToWin: Number(getValue(`rules.${key}.legsToWin`)),
+      startRule: getValue(`rules.${key}.startRule`),
+      checkoutRule: getValue(`rules.${key}.checkoutRule`),
+      bullOutRule: getValue(`rules.${key}.bullOutRule`)
+    });
+    const payload = {
+      rules: {
+        groupPhase: getRule('groupPhase'),
+        groupRanking: Array.from({ length: 4 }, (_item, index) =>
+          settingsForm.querySelector(`[data-ranking-index="${index}"]`).value),
+        luckyLosers: getRule('luckyLosers'),
+        endRound: getRule('endRound'),
+        endRoundSemifinal: getRule('endRoundSemifinal'),
+        endRoundFinal: getRule('endRoundFinal')
+      },
+      timings: {
+        baseMinutesPerLeg: Number(getValue('timings.baseMinutesPerLeg')),
+        doubleInMasterInSurchargeMinutes: Number(getValue('timings.doubleInMasterInSurchargeMinutes')),
+        doubleOutMasterOutSurchargeMinutes: Number(getValue('timings.doubleOutMasterOutSurchargeMinutes')),
+        additionalMinutesPer200Points: Number(getValue('timings.additionalMinutesPer200Points'))
+      }
+    };
+
+    try {
+      const result = await apiRequest('/api/settings', {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+      });
+      state.generalSettings = result.data;
+      renderSettingsView(personSelect.value);
+      showNotice('Die Grund-Regeln und Spielzeiten wurden gespeichert.', 'success');
+    } catch (error) {
+      showNotice(error.message, 'error');
+    }
+  });
+
+  root.querySelector('#cleanupLocalDatabaseButton').addEventListener('click', async (event) => {
+    if (!window.confirm('Die Bereinigung löscht Daten unwiderruflich. Möchtest du die lokale Datenbank wirklich bereinigen?')) {
+      return;
+    }
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      const result = await apiRequest('/api/database/cleanup', {
+        method: 'POST',
+        body: JSON.stringify({ confirmed: true })
+      });
+      await loadData();
+      const { deletedTournaments, deletedTeams, deletedPersons } = result.data;
+      showNotice(`Bereinigung abgeschlossen: ${deletedTournaments} Turniere, ${deletedTeams} Teams und ${deletedPersons} Spieler gelöscht.`, 'success');
+    } catch (error) {
+      showNotice(error.message, 'error');
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+function renderSettingsView(selectedPersonId = '') {
+  const root = document.getElementById('generalSettingsContent');
+  root.innerHTML = renderGeneralSettingsContent(selectedPersonId);
+  bindGeneralSettingsForms(root);
+}
+
+async function loadSettingsView() {
+  const root = document.getElementById('generalSettingsContent');
+  root.innerHTML = '<div class="loading-state">Einstellungen werden geladen …</div>';
+  try {
+    const [settings, persons] = await Promise.all([
+      apiRequest('/api/settings'),
+      apiRequest('/api/persons')
+    ]);
+    state.generalSettings = settings.data;
+    state.persons = persons.data;
+    renderSettingsView();
+  } catch (error) {
+    console.error('Could not load general settings:', error);
+    root.innerHTML = `
+      <div class="surface settings-category" role="alert">
+        <p>Die Einstellungen konnten nicht geladen werden: ${escapeHtml(error.message)}</p>
+        <button class="button button-quiet" id="retrySettingsLoadButton" type="button">Erneut versuchen</button>
+      </div>
+    `;
+    root.querySelector('#retrySettingsLoadButton').addEventListener('click', loadSettingsView);
+  }
+}
+
+async function loadGeneralSettings() {
+  try {
+    const result = await apiRequest('/api/settings');
+    state.generalSettings = result.data;
+    if (state.activeView === 3 && state.currentStep === 6) renderStep();
+  } catch (error) {
+    console.error('Could not load general settings:', error);
+    showNotice(`Die allgemeinen Einstellungen konnten nicht geladen werden: ${error.message}`, 'error');
+  }
 }
 
 function hideNotice() {
@@ -729,9 +1069,41 @@ function renderRulesStep(section) {
     { name: 'Gruppenphase', key: 'group', legacyKey: '0', includeRanking: true, rulePhase: 'group' },
     { name: 'Lucky Losers', key: 'lucky', legacyKey: '2', rulePhase: 'lucky' }
   ];
+  const ruleLabels = {
+    single_in: 'Single In',
+    double_in: 'Double In',
+    master_in: 'Master In',
+    single_out: 'Single Out',
+    double_out: 'Double Out',
+    master_out: 'Master Out',
+    no_bullout: 'no Bull-Off',
+    classic: 'classic',
+    pdc: 'PDC'
+  };
+  const presetForPhase = (name, rulePhase) => {
+    const key = rulePhase === 'group'
+      ? 'groupPhase'
+      : rulePhase === 'lucky'
+        ? 'luckyLosers'
+        : name === 'Halbfinale'
+          ? 'endRoundSemifinal'
+          : name === 'Finale'
+            ? 'endRoundFinal'
+            : 'endRound';
+    const preset = state.generalSettings.rules[key];
+    return {
+      start: String(preset.startingScore),
+      sets: String(preset.setsToWin),
+      legs: String(preset.legsToWin),
+      in: ruleLabels[preset.startRule],
+      out: ruleLabels[preset.checkoutRule],
+      bull: ruleLabels[preset.bullOutRule]
+    };
+  };
   const renderPhaseCard = ({ name, key, legacyKey, includeRanking, rulePhase, minQualifiers, exactQualifiers, additionalPlacementGames }) => {
     const configId = (field) => `${field}-${key}`;
     const legacyId = (field) => legacyKey ? `${field}-${legacyKey}` : undefined;
+    const defaults = presetForPhase(name, rulePhase);
     const visibilityAttributes = [
       rulePhase ? `data-rule-phase="${rulePhase}"` : '',
       minQualifiers ? `data-min-qualifiers="${minQualifiers}"` : '',
@@ -742,28 +1114,34 @@ function renderRulesStep(section) {
     <article class="phase-card" ${visibilityAttributes}>
       <div class="phase-title"><strong>${name}</strong></div>
       <div class="phase-controls">
-        ${compactSelect(configId('start'), 'Start', ['301', '501', '701', '901'], '501', legacyId('start'))}
-        ${compactSelect(configId('sets'), 'Sets · First to', ['1', '2', '3', '4'], '1', legacyId('sets'))}
-        ${compactSelect(configId('legs'), 'Legs · First to', ['2', '3', '4', '5', '6'], '2', legacyId('legs'))}
-        ${radioOptions(configId('in'), 'Check In', ['Single In', 'Double In', 'Master In'], 'Single In', legacyId('in'))}
-        ${radioOptions(configId('out'), 'Check Out', ['Single Out', 'Double Out', 'Master Out'], 'Double Out', legacyId('out'))}
-        ${radioOptions(configId('bull'), 'Bull-Off', ['no Bull-Off', 'classic', 'PDC'], 'classic', legacyId('bull'))}
+        ${compactSelect(configId('start'), 'Start', ['301', '501', '701', '901'], defaults.start, legacyId('start'))}
+        ${compactSelect(configId('sets'), 'Sets · First to', ['1', '2', '3', '4'], defaults.sets, legacyId('sets'))}
+        ${compactSelect(configId('legs'), 'Legs · First to', ['2', '3', '4', '5', '6'], defaults.legs, legacyId('legs'))}
+        ${radioOptions(configId('in'), 'Check In', ['Single In', 'Double In', 'Master In'], defaults.in, legacyId('in'))}
+        ${radioOptions(configId('out'), 'Check Out', ['Single Out', 'Double Out', 'Master Out'], defaults.out, legacyId('out'))}
+        ${radioOptions(configId('bull'), 'Bull-Off', ['no Bull-Off', 'classic', 'PDC'], defaults.bull, legacyId('bull'))}
       </div>
       ${includeRanking ? `
         <div class="group-scoring">
           <div class="form-section-header"><div><h3>Wertung der Gruppen</h3><p class="subtle-copy">Kriterien werden in dieser Reihenfolge zum Ermitteln der Platzierung herangezogen.</p></div></div>
           <div class="summary-strip">
             ${[
-              ['Platzierung', 'Platzierung'],
-              ['Siege', 'Siege'],
-              ['Leg-Differenz', 'Leg-Differenz'],
-              ['3-Dart-Average', '3-Dart-Average']
-            ].map(([label, selected], index) => `
+              'Platzierung',
+              'Siege',
+              'Leg-Differenz',
+              '3-Dart-Average'
+            ].map((label, index) => {
+              const criterion = state.generalSettings.rules.groupRanking[index];
+              const selected = Object.hasOwn(state.configuration, `groupRanking-${index}`)
+                ? state.configuration[`groupRanking-${index}`]
+                : rankingOptionLabels[criterion];
+              return `
               <div class="compact-field">
                 <label for="groupRanking-${index}">${index + 1}. Kriterium</label>
-                <select id="groupRanking-${index}" data-config>${selectOptions(['', 'Platzierung', 'Siege', 'Leg-Differenz', '3-Dart-Average'], Object.hasOwn(state.configuration, `groupRanking-${index}`) ? state.configuration[`groupRanking-${index}`] : selected)}</select>
+                <select id="groupRanking-${index}" data-config>${selectOptions(['', 'Platzierung', 'Siege', 'Leg-Differenz', '3-Dart-Average'], selected)}</select>
               </div>
-            `).join('')}
+            `;
+            }).join('')}
           </div>
           <div class="alert alert-error group-ranking-error" id="groupRankingError" role="alert" hidden><strong>Fehler:</strong> Kriterien dürfen nur einmal vorkommen und müssen nacheinander definiert sein.</div>
           <div class="alert alert-info info-banner"><strong>Info:</strong> Führt kein Kriterium zu einer Entscheidung, so gibt es einen direkten Vergleich über ein Entscheidungsleg mit klassischem Bull-Off.</div>
@@ -820,6 +1198,15 @@ function resetPhaseDefaults(participantCount) {
     placementPhaseEnabled: participantCount >= 4,
     placementGames: true,
     luckyLosers: participantCount - qualifierCount > 1
+  });
+}
+
+function resetTournamentRuleConfiguration() {
+  Object.keys(state.configuration).forEach((key) => {
+    if (/^(start|sets|legs|in|out|bull)-(group|lucky|round-\d+|0|1|2)$/.test(key)
+      || /^groupRanking-\d+$/.test(key)) {
+      delete state.configuration[key];
+    }
   });
 }
 
@@ -1957,6 +2344,7 @@ async function loadData() {
     if (state.currentTournamentId && !state.tournaments.some((item) => item.id === state.currentTournamentId)) {
       state.currentTournamentId = null;
       state.participationFeeEnabled = true;
+      resetTournamentRuleConfiguration();
       resetPhaseDefaults(0);
     }
     updateTournamentMetrics();
@@ -1985,7 +2373,10 @@ function openTournament(id) {
   if (!tournament) return;
   const tournamentChanged = state.currentTournamentId !== tournament.id;
   state.currentTournamentId = tournament.id;
-  if (tournamentChanged) resetPhaseDefaults(currentTournamentEntries().length);
+  if (tournamentChanged) {
+    resetTournamentRuleConfiguration();
+    resetPhaseDefaults(currentTournamentEntries().length);
+  }
   state.currentTournamentName = tournament.name;
   state.currentTournamentDate = tournament.tournament_date;
   state.currentTournamentStatus = tournament.status || 'draft';
@@ -2005,6 +2396,7 @@ document.addEventListener('click', (event) => {
     state.currentTournamentStatus = 'draft';
     state.participationFeeEnabled = true;
     state.currentStep = 3;
+    resetTournamentRuleConfiguration();
     resetPhaseDefaults(0);
     resetDraw();
     setActiveView(3);
@@ -2053,6 +2445,7 @@ document.getElementById('resetDatabaseButton').addEventListener('click', async (
     state.entries = [];
     state.persons = [];
     state.teams = [];
+    resetTournamentRuleConfiguration();
     resetPhaseDefaults(0);
     resetDraw();
     setActiveView(1);
@@ -2074,5 +2467,6 @@ renderStepNavigation();
 renderStep();
 renderTournaments();
 loadData();
+loadGeneralSettings();
 loadTestTools();
 window.setInterval(refreshHeaderStatuses, 15000);

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { Pool } from 'pg';
-import { bootstrapDatabase, database, resetDatabase } from '../dist/database.js';
+import { bootstrapDatabase, cleanupLocalData, database, resetDatabase } from '../dist/database.js';
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 
@@ -34,6 +34,7 @@ test('database bootstrap is repeatable and enforces core relationships', {
     assert.deepEqual(
       initializedTables.rows.map((row) => row.table_name).sort(),
       [
+        'general_settings',
         'persons',
         'teams',
         'tournament_board_clients',
@@ -49,6 +50,12 @@ test('database bootstrap is repeatable and enforces core relationships', {
         'tournament_phases',
         'tournaments',
       ].sort(),
+    );
+    const defaultSettings = await testPool.query('SELECT settings FROM general_settings WHERE id = 1');
+    assert.equal(defaultSettings.rows[0].settings.rules.groupPhase.startingScore, 301);
+    await testPool.query(
+      'UPDATE general_settings SET settings = $1::jsonb WHERE id = 1',
+      [JSON.stringify({ custom: true })],
     );
     const tournamentColumns = await testPool.query(
       `
@@ -203,6 +210,50 @@ test('database bootstrap is repeatable and enforces core relationships', {
     );
 
     await testPool.query(
+      `UPDATE tournament_matches SET status = 'completed', started_at = now(), completed_at = now() WHERE id = $1`,
+      [matchId],
+    );
+    const oldTournament = await testPool.query(
+      `
+        INSERT INTO tournaments (name, tournament_date, status)
+        VALUES ('Old unstarted tournament', CURRENT_DATE - INTERVAL '1 day', 'draft')
+        RETURNING id
+      `,
+    );
+    await testPool.query(
+      'INSERT INTO tournament_entries (tournament_id, person_id) VALUES ($1, $2)',
+      [oldTournament.rows[0].id, personThree],
+    );
+    const unusedPersons = await testPool.query(`
+      INSERT INTO persons (first_name, last_name, gender)
+      VALUES ('Unused One', 'Test', 'm'), ('Unused Two', 'Test', 'w')
+      RETURNING id
+    `);
+    const [unusedPersonOne, unusedPersonTwo] = unusedPersons.rows.map((row) => row.id).sort();
+    await testPool.query(
+      `
+        INSERT INTO teams (name, member_low_person_id, member_high_person_id)
+        VALUES ('Unused team', $1, $2)
+      `,
+      [unusedPersonOne, unusedPersonTwo],
+    );
+    assert.deepEqual(await cleanupLocalData(testPool), {
+      deletedTournaments: 1,
+      deletedTeams: 1,
+      deletedPersons: 3,
+    });
+    const preservedParticipants = await testPool.query(
+      'SELECT id FROM persons WHERE id = ANY($1::uuid[]) ORDER BY id',
+      [[personOne, personTwo]],
+    );
+    assert.equal(preservedParticipants.rows.length, 2);
+    const remainingOldTournament = await testPool.query(
+      'SELECT id FROM tournaments WHERE id = $1',
+      [oldTournament.rows[0].id],
+    );
+    assert.equal(remainingOldTournament.rows.length, 0);
+
+    await testPool.query(
       `
         INSERT INTO tournament_board_clients (tournament_id, client_secret_hash, board_number)
         VALUES ($1, 'test-hash', 1)
@@ -222,6 +273,8 @@ test('database bootstrap is repeatable and enforces core relationships', {
     );
 
     await bootstrapDatabase(testPool);
+    const persistedSettings = await testPool.query('SELECT settings FROM general_settings WHERE id = 1');
+    assert.deepEqual(persistedSettings.rows[0].settings, { custom: true });
     await testPool.query(
       'UPDATE tournaments SET participation_fee_enabled = false WHERE id = $1',
       [tournamentId],

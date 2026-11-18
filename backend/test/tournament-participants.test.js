@@ -72,12 +72,43 @@ test('renaming a reused team preserves its identity and rolls back name conflict
       return result;
     };
 
+    const put = async (path, body, status = 200) => {
+      const response = await fetch(`${base}${path}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const result = await response.json();
+      assert.equal(response.status, status, JSON.stringify(result));
+      return result;
+    };
+
     const firstTournament = (await post('/api/tournaments', { name: 'First tournament' })).data;
     const secondTournament = (await post('/api/tournaments', { name: 'Second tournament' })).data;
+    const initialSettings = await (await fetch(`${base}/api/settings`)).json();
+    assert.equal(initialSettings.data.rules.groupPhase.startingScore, 301);
+    const changedSettings = structuredClone(initialSettings.data);
+    changedSettings.rules.groupPhase.startingScore = 501;
+    changedSettings.timings.baseMinutesPerLeg = 6;
+    const savedSettings = await put('/api/settings', changedSettings);
+    assert.equal(savedSettings.data.rules.groupPhase.startingScore, 501);
+    assert.equal(savedSettings.data.timings.baseMinutesPerLeg, 6);
+    await put('/api/settings', { rules: {}, timings: {} }, 400);
+
     const people = [];
     for (const firstName of ['Alex', 'Bea', 'Chris', 'Dana']) {
       people.push((await post('/api/persons', { firstName, lastName: 'Test', gender: 'm' })).data);
     }
+    const updatedPerson = await put(`/api/persons/${people[0].id}`, {
+      firstName: 'Alexandra',
+      lastName: 'Updated',
+      nickname: 'Ally',
+      gender: 'w',
+    });
+    assert.equal(updatedPerson.data.first_name, 'Alexandra');
+    assert.equal(updatedPerson.data.nickname, 'Ally');
+    await put(`/api/persons/${people[0].id}`, { firstName: '', lastName: 'Updated', gender: 'w' }, 400);
+
     const team = (await post('/api/teams', {
       name: 'Original team',
       personIds: [people[0].id, people[1].id],
@@ -151,6 +182,20 @@ test('renaming a reused team preserves its identity and rolls back name conflict
     entries = await (await fetch(`${base}/api/tournament-entries`)).json();
     assert.ok(entries.data.find((entry) => entry.tournament_id === secondTournament.id)
       .members.every((member) => member.participation_fee_paid));
+
+    await post('/api/database/cleanup', {}, 400);
+    await post('/api/tournaments', {
+      name: 'Past unstarted tournament',
+      tournamentDate: '2000-01-01',
+    });
+    const cleanupResult = await post('/api/database/cleanup', { confirmed: true }, 200);
+    assert.deepEqual(cleanupResult.data, {
+      deletedTournaments: 1,
+      deletedTeams: 1,
+      deletedPersons: 2,
+    });
+    const remainingPeople = await (await fetch(`${base}/api/persons`)).json();
+    assert.equal(remainingPeople.data.length, 2);
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (child && child.exitCode === null) {

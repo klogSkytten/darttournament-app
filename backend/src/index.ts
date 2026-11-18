@@ -1,7 +1,8 @@
 import express from 'express';
 import type { PoolClient } from 'pg';
 import { config } from './config.js';
-import { bootstrapDatabase, database, resetDatabase } from './database.js';
+import { bootstrapDatabase, cleanupLocalData, database, resetDatabase } from './database.js';
+import { parseGeneralSettings } from './settings.js';
 
 const app = express();
 
@@ -78,6 +79,62 @@ async function ensureTournamentEntryIsUnique({ tournamentId, personId, teamId }:
 }
 
 app.use(express.json());
+
+app.get('/api/settings', async (_req, res) => {
+  try {
+    const result = await database.query('SELECT settings FROM general_settings WHERE id = 1');
+    if (result.rows.length === 0) {
+      throw new Error('General settings have not been initialized');
+    }
+
+    return res.status(200).json({ ok: true, data: result.rows[0].settings });
+  } catch (error) {
+    console.error('Failed to load general settings:', error);
+    return res.status(500).json({ ok: false, message: 'Could not load general settings' });
+  }
+});
+
+app.put('/api/settings', async (req, res) => {
+  const settings = parseGeneralSettings(req.body);
+  if (!settings) {
+    return res.status(400).json({ ok: false, message: 'General settings are invalid' });
+  }
+
+  try {
+    const result = await database.query(
+      `
+        INSERT INTO general_settings (id, settings, updated_at)
+        VALUES (1, $1::jsonb, now())
+        ON CONFLICT (id) DO UPDATE
+        SET settings = EXCLUDED.settings, updated_at = now()
+        RETURNING settings
+      `,
+      [JSON.stringify(settings)],
+    );
+
+    return res.status(200).json({ ok: true, data: result.rows[0].settings });
+  } catch (error) {
+    console.error('Failed to save general settings:', error);
+    return res.status(500).json({ ok: false, message: 'Could not save general settings' });
+  }
+});
+
+app.post('/api/database/cleanup', async (req, res) => {
+  if (req.body?.confirmed !== true) {
+    return res.status(400).json({
+      ok: false,
+      message: 'Explicit confirmation is required before cleaning the database',
+    });
+  }
+
+  try {
+    const deleted = await cleanupLocalData();
+    return res.status(200).json({ ok: true, data: deleted });
+  } catch (error) {
+    console.error('Failed to clean local database:', error);
+    return res.status(500).json({ ok: false, message: 'Could not clean local database' });
+  }
+});
 
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -437,6 +494,42 @@ app.post('/api/persons', async (req, res) => {
       ok: false,
       message: 'Could not create person',
     });
+  }
+});
+
+app.put('/api/persons/:id', async (req, res) => {
+  const { firstName, lastName, nickname, gender } = req.body ?? {};
+
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.id)
+    || typeof firstName !== 'string' || firstName.trim() === ''
+    || typeof lastName !== 'string' || lastName.trim() === ''
+    || (nickname !== undefined && typeof nickname !== 'string')
+    || (gender !== 'm' && gender !== 'w')) {
+    return res.status(400).json({
+      ok: false,
+      message: 'First name, last name, and a valid gender are required',
+    });
+  }
+
+  try {
+    const result = await database.query(
+      `
+        UPDATE persons
+        SET first_name = $1, last_name = $2, nickname = $3, gender = $4, updated_at = now()
+        WHERE id = $5
+        RETURNING *
+      `,
+      [firstName.trim(), lastName.trim(), nickname?.trim() || null, gender, req.params.id],
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ ok: false, message: 'Person not found' });
+    }
+
+    return res.status(200).json({ ok: true, data: result.rows[0] });
+  } catch (error) {
+    console.error('Failed to update person:', error);
+    return res.status(500).json({ ok: false, message: 'Could not update person' });
   }
 });
 
