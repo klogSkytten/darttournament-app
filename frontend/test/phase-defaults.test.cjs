@@ -183,11 +183,14 @@ test('schedule includes group pairs, numbered dependencies, placements and final
   const { context } = await createApp();
   const result = JSON.parse(vm.runInContext(`
     state.currentTournamentId = 't';
-    state.entries = Array.from({ length: 8 }, (_, id) => ({ id, tournament_id: 't' }));
+    state.entries = Array.from({ length: 8 }, (_, id) => ({
+      id, tournament_id: 't', person_id: id, person_first_name: 'Player ' + id
+    }));
     resetPhaseDefaults(8);
     state.configuration.qualifierCount = '4';
     state.configuration.gamesPerPair = '2';
     state.configuration.luckyLosers = true;
+    state.drawGroups = [state.entries.slice(0, 4), state.entries.slice(4)];
     const matches = buildMatchSchedule();
     JSON.stringify(matches.map((match) => ({
       number: match.number, phase: match.phase, label: match.label,
@@ -206,6 +209,13 @@ test('schedule includes group pairs, numbered dependencies, placements and final
     .map((match) => [match.first, match.second].sort().join('-'));
   assert.equal(new Set(pairs).size, 12);
   assert.ok([...new Set(pairs)].every((pair) => pairs.filter((item) => item === pair).length === 2));
+  const firstGroupMatches = result.filter((match) => match.phase === 'Gruppenphase').slice(0, 4);
+  assert.deepEqual(firstGroupMatches.map((match) => match.label), [
+    'Gruppe A', 'Gruppe B', 'Gruppe A', 'Gruppe B'
+  ]);
+  const bracketMatches = result.filter((match) => match.phase !== 'Gruppenphase');
+  assert.ok(bracketMatches.some((match, index) =>
+    index > 0 && bracketMatches[index - 1].phase !== match.phase));
   result.forEach((match, index) => {
     assert.equal(match.number, index + 1);
     for (const entry of [match.first, match.second]) {
@@ -242,6 +252,68 @@ test('schedule respects the draw and uses neutral extra qualifiers', async () =>
   assert.equal(result.filter((match) => match.phase === 'Lucky Losers').length, 7);
 });
 
+test('pre-draw schedule contains only group placeholder matches', async () => {
+  const { context } = await createApp();
+  const result = JSON.parse(vm.runInContext(`
+    state.currentTournamentId = 't';
+    state.entries = Array.from({ length: 11 }, (_, id) => ({ id, tournament_id: 't' }));
+    resetPhaseDefaults(11);
+    JSON.stringify(buildMatchSchedule().map((match) => [match.phase, match.first, match.second]));
+  `, context));
+  assert.equal(result.length, 25);
+  assert.ok(result.every(([phase]) => phase === 'Gruppenphase'));
+  assert.ok(result.some(([, first, second]) => first === 'A1' && second === 'A6'));
+});
+
+test('group schedule avoids consecutive games for the same participant when possible', async () => {
+  const { context } = await createApp();
+  const result = JSON.parse(vm.runInContext(`
+    state.currentTournamentId = 't';
+    state.entries = Array.from({ length: 11 }, (_, id) => ({
+      id, tournament_id: 't', person_id: id, person_first_name: 'Player ' + id
+    }));
+    resetPhaseDefaults(11);
+    state.drawGroups = [state.entries.slice(0, 6), state.entries.slice(6)];
+    JSON.stringify(buildMatchSchedule()
+      .filter((match) => match.phase === 'Gruppenphase')
+      .map((match) => [match.first, match.second]));
+  `, context));
+  assert.equal(result.length, 25);
+  for (let index = 1; index < result.length; index += 1) {
+    assert.ok(!result[index - 1].some((id) => result[index].includes(id)),
+      `participant repeated in consecutive group matches ${index} and ${index + 1}`);
+  }
+});
+
+test('bracket scheduling uses available matches to avoid consecutive participants', async () => {
+  const { context } = await createApp();
+  const result = JSON.parse(vm.runInContext(`
+    JSON.stringify(orderBracketMatches([
+      { phase: 'Endrunde', label: 'Halbfinale', first: 'B', second: 'E', bracketRound: 0, rankStart: 1 },
+      { phase: 'Endrunde', label: 'Halbfinale', first: 'F', second: 'G', bracketRound: 0, rankStart: 1 },
+      { phase: 'Lucky Losers', label: 'Halbfinale', first: 'A', second: 'B', bracketRound: 0, rankStart: 1 },
+      { phase: 'Lucky Losers', label: 'Halbfinale', first: 'C', second: 'D', bracketRound: 0, rankStart: 1 }
+    ]).map((match) => [match.phase, match.first, match.second]));
+  `, context));
+  assert.equal(result.length, 4);
+  for (let index = 1; index < result.length; index += 1) {
+    assert.ok(!result[index - 1].slice(1).some((participant) => result[index].slice(1).includes(participant)));
+  }
+});
+
+test('draw labels use short Lucky placeholders', async () => {
+  const { context } = await createApp();
+  const result = vm.runInContext(`
+    state.currentTournamentId = 't';
+    state.entries = Array.from({ length: 11 }, (_, id) => ({ id, tournament_id: 't' }));
+    resetPhaseDefaults(11);
+    state.currentStep = 7;
+    renderDrawStep({ id: 7, title: 'Auslosung', description: '' });
+  `, context);
+  assert.match(result, /Lucky 1/);
+  assert.doesNotMatch(result, /Nicht-Qualifikant/);
+});
+
 test('schedule counts agree with badges across phase settings and byes', async () => {
   const { context } = await createApp();
   const error = vm.runInContext(`
@@ -255,6 +327,20 @@ test('schedule counts agree with badges across phase settings and byes', async (
             state.configuration.groupPhaseEnabled = groupEnabled;
             state.configuration.placementPhaseEnabled = true;
             state.configuration.placementGames = placementGames;
+            if (groupEnabled) {
+              const groupCount = Math.min(currentGroupCount(), count);
+              const baseSize = groupCount ? Math.floor(count / groupCount) : 0;
+              let offset = 0;
+              state.drawGroups = Array.from({ length: groupCount }, (_, index) => {
+                const size = baseSize + (index < count % groupCount ? 1 : 0);
+                const group = state.entries.slice(offset, offset + size);
+                offset += size;
+                return group;
+              });
+            } else {
+              state.drawGroups = null;
+              state.drawBracketEntries = state.entries;
+            }
             const matches = buildMatchSchedule();
             const metrics = calculateTournamentMetrics(count, currentGroupCount(), 1, {
               ...state.configuration, qualifierCount: Number(state.configuration.qualifierCount)
@@ -286,6 +372,7 @@ test('the final remains last when only lucky losers are enabled', async () => {
     state.configuration.qualifierCount = '4';
     state.configuration.placementPhaseEnabled = false;
     state.configuration.luckyLosers = true;
+    state.drawGroups = [state.entries.slice(0, 4), state.entries.slice(4)];
     JSON.stringify(buildMatchSchedule().slice(-2).map((match) => [match.phase, match.label]));
   `, context));
   assert.deepEqual(lastMatches, [['Lucky Losers', 'Spiel um Platz 3'], ['Lucky Losers', 'Finale']]);
@@ -309,7 +396,7 @@ test('direct knockout schedule uses drawn pairings and passes byes forward', asy
     })));
   `, context));
   assert.deepEqual(result, [
-    { number: 1, label: 'Runde 1', first: 'Ben', second: 'Cara' },
+    { number: 1, label: 'Halbfinale', first: 'Ben', second: 'Cara' },
     { number: 2, label: 'Finale', first: 'Ada', second: 'Sieger Spiel 1' }
   ]);
 });

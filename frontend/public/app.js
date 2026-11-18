@@ -619,7 +619,7 @@ function renderModeStep(section) {
           ${groupNumberInput('gamesPerPair', 'Spiele gegeneinander', state.configuration.gamesPerPair ?? 1)}
           <div class="field" id="qualifierCountField">
             <label for="qualifierCount">Qualifikanten für Endrunde</label>
-            <input id="qualifierCount" type="number" min="4" max="${Math.max(maxQualifierCount, 4)}" step="1" value="${qualifierCount}" data-config${maxQualifierCount < 4 ? ' disabled' : ''}>
+            <input id="qualifierCount" type="number" min="4" max="${Math.max(maxQualifierCount, 4)}" step="1" value="${qualifierCount}" data-config${maxQualifierCount < 4 || state.configuration.placementPhaseEnabled === false ? ' disabled' : ''}>
           </div>
         </div>
       </article>
@@ -682,8 +682,8 @@ function syncPhaseDependencies() {
   }
   if (luckyToggle) luckyToggle.disabled = disableLuckyLosers;
 
-  const qualifierField = root.querySelector('#qualifierCountField');
-  if (qualifierField) qualifierField.hidden = !placementEnabled && participantCount >= 4;
+  const qualifierInput = root.querySelector('#qualifierCount');
+  if (qualifierInput) qualifierInput.disabled = !placementEnabled || participantCount < 4;
 
   root.querySelectorAll('.group-settings input').forEach((input) => {
     input.readOnly = !groupEnabled;
@@ -941,6 +941,93 @@ function renderDrawBracket(qualifierCount, directEntries = null, labelPrefix = '
   </div>`;
 }
 
+function bracketRoundName(bracketSize, depth) {
+  const roundEntryCount = bracketSize / (2 ** depth);
+  return ({
+    2: 'Finale',
+    4: 'Halbfinale',
+    8: 'Viertelfinale',
+    16: 'Achtelfinale',
+    32: 'Sechzehntelfinale',
+    64: 'Zweiunddreißigstelfinale'
+  })[roundEntryCount] || `Runde ${depth + 1}`;
+}
+
+function matchParticipants(match, cache = new Map(), resolving = new Set()) {
+  if (!match || cache.has(match)) return cache.get(match) || new Set();
+  if (resolving.has(match)) return new Set();
+  resolving.add(match);
+  const participants = new Set();
+  [match.first, match.second].forEach((entry) => {
+    if (entry && typeof entry === 'object' && entry.match && typeof entry.match === 'object') {
+      matchParticipants(entry.match, cache, resolving).forEach((participant) => participants.add(participant));
+    } else if (entry) {
+      participants.add(typeof entry === 'string'
+        ? entry
+        : `entry:${entry.id ?? drawEntryLabel(entry)}`);
+    }
+  });
+  resolving.delete(match);
+  cache.set(match, participants);
+  return participants;
+}
+
+function appendMatchesAvoidingConsecutiveParticipants(matches, ordered, cache = new Map()) {
+  const pending = matches.slice();
+  while (pending.length) {
+    const previousParticipants = ordered.length
+      ? matchParticipants(ordered[ordered.length - 1], cache)
+      : new Set();
+    const nextIndex = pending.findIndex((match) => {
+      const participants = matchParticipants(match, cache);
+      return [...participants].every((participant) => !previousParticipants.has(participant));
+    });
+    ordered.push(pending.splice(nextIndex < 0 ? 0 : nextIndex, 1)[0]);
+  }
+}
+
+function orderBracketMatches(matches) {
+  const rounds = new Map();
+  matches.forEach((match) => {
+    if (!rounds.has(match.bracketRound)) rounds.set(match.bracketRound, []);
+    rounds.get(match.bracketRound).push(match);
+  });
+  const ordered = [];
+  const participantCache = new Map();
+  let previousPhase = 'Endrunde';
+  [...rounds.keys()].sort((left, right) => left - right).forEach((round) => {
+    const roundMatches = rounds.get(round);
+    const ranks = [...new Set(roundMatches.map((match) => match.rankStart))]
+      .sort((left, right) => right - left);
+    ranks.forEach((rankStart) => {
+      const preferredMatches = [];
+      const queues = new Map(['Lucky Losers', 'Endrunde'].map((phase) => [
+        phase,
+        roundMatches.filter((match) => match.rankStart === rankStart && match.phase === phase)
+      ]));
+      while (queues.get('Lucky Losers').length || queues.get('Endrunde').length) {
+        const preferred = previousPhase === 'Lucky Losers' ? 'Endrunde' : 'Lucky Losers';
+        const phase = queues.get(preferred).length
+          ? preferred
+          : preferred === 'Endrunde' ? 'Lucky Losers' : 'Endrunde';
+        preferredMatches.push(queues.get(phase).shift());
+        previousPhase = phase;
+      }
+      appendMatchesAvoidingConsecutiveParticipants(preferredMatches, ordered, participantCache);
+    });
+  });
+  const thirdPlaceIndex = ordered.findIndex((match) =>
+    match.phase === 'Endrunde' && match.label === 'Spiel um Platz 3');
+  const finalIndex = ordered.findIndex((match) =>
+    match.phase === 'Endrunde' && match.label === 'Finale');
+  const endRoundFinals = [thirdPlaceIndex, finalIndex]
+    .filter((index) => index >= 0)
+    .map((index) => ordered[index]);
+  const schedule = ordered.filter((match) =>
+    !(match.phase === 'Endrunde' && ['Spiel um Platz 3', 'Finale'].includes(match.label)));
+  return [...schedule, ...endRoundFinals];
+}
+
 function renderDrawStep(section) {
   const entries = currentTournamentEntries();
   const groupCount = currentGroupCount();
@@ -998,7 +1085,7 @@ function renderDrawStep(section) {
     ? `<div class="draw-bracket-pair">
         <section class="draw-section">
           <h2>Lucky Losers</h2>
-          ${renderDrawBracket(luckyLoserCount, null, 'Nicht-Qualifikant')}
+          ${renderDrawBracket(luckyLoserCount, null, 'Lucky')}
         </section>
         <div class="draw-bracket-divider" aria-hidden="true"></div>
         <section class="draw-section">
@@ -1121,8 +1208,8 @@ function groupRoundRobin(players) {
 
 function addPlacementBracket(matches, phase, seeds, placementGames, firstRoundSlots = null) {
   if (seeds.length < 2) return;
-  let brackets = [{ seeds, rank: 1, slots: firstRoundSlots }];
-  let round = 1;
+  const bracketSize = nextBracketSize(seeds.length);
+  let brackets = [{ seeds, rankStart: 1, slots: firstRoundSlots, depth: 0 }];
   while (brackets.length) {
     const nextBrackets = [];
     brackets.forEach((bracket) => {
@@ -1143,23 +1230,40 @@ function addPlacementBracket(matches, phase, seeds, placementGames, firstRoundSl
           if (first || second) winners.push(first || second);
           continue;
         }
-        const isFinal = bracket.rank === 1 && bracket.seeds.length === 2;
-        const isThirdPlace = bracket.rank === 3 && bracket.seeds.length === 2;
+        const baseRoundName = bracketRoundName(bracketSize, bracket.depth);
+        const isPlacementGame = bracket.rankStart > 1;
         const match = {
           phase,
-          label: isFinal ? 'Finale' : isThirdPlace ? 'Spiel um Platz 3' : `Runde ${round}`,
+          label: bracket.seeds.length === 2
+            ? bracket.rankStart === 1
+              ? 'Finale'
+              : `Spiel um Platz ${bracket.rankStart}`
+            : `${baseRoundName}${isPlacementGame ? ' Platzierungsspiele' : ''}`,
           first,
-          second
+          second,
+          bracketRound: bracket.depth,
+          rankStart: bracket.rankStart
         };
         matches.push(match);
         winners.push({ match, outcome: 'Sieger' });
         if (placementGames) losers.push({ match, outcome: 'Verlierer' });
       }
-      if (winners.length > 1) nextBrackets.push({ seeds: winners, rank: bracket.rank });
-      if (losers.length > 1) nextBrackets.push({ seeds: losers, rank: bracket.rank + size / 2 });
+      if (winners.length > 1) {
+        nextBrackets.push({
+          seeds: winners,
+          rankStart: bracket.rankStart,
+          depth: bracket.depth + 1
+        });
+      }
+      if (losers.length > 1) {
+        nextBrackets.push({
+          seeds: losers,
+          rankStart: bracket.rankStart + size / 2,
+          depth: bracket.depth + 1
+        });
+      }
     });
     brackets = nextBrackets;
-    round += 1;
   }
 }
 
@@ -1168,7 +1272,8 @@ function buildMatchSchedule() {
   const participantCount = entries.length;
   const groupEnabled = state.configuration.groupPhaseEnabled !== false;
   const placementEnabled = state.configuration.placementPhaseEnabled === true;
-  const matches = [];
+  const groupMatches = [];
+  const bracketMatches = [];
   let groups = [];
   if (groupEnabled) {
     const count = currentGroupCount();
@@ -1187,13 +1292,25 @@ function buildMatchSchedule() {
     const repetitions = Number(state.configuration.gamesPerPair);
     for (let repetition = 0; repetition < repetitions; repetition += 1) {
       for (let round = 0; round < roundCount; round += 1) {
-        groups.forEach((group) => {
-          (group.rounds[round] || []).forEach(([first, second]) => {
-            matches.push({ phase: 'Gruppenphase', label: `Gruppe ${group.label}`, first, second });
+        const roundMatchCount = Math.max(0, ...groups.map((group) => (group.rounds[round] || []).length));
+        for (let game = 0; game < roundMatchCount; game += 1) {
+          groups.forEach((group) => {
+            const pairing = group.rounds[round]?.[game];
+            if (pairing) {
+              const [first, second] = pairing;
+              groupMatches.push({ phase: 'Gruppenphase', label: `Gruppe ${group.label}`, first, second });
+            }
           });
-        });
+        }
       }
     }
+  }
+
+  const matches = [];
+  appendMatchesAvoidingConsecutiveParticipants(groupMatches, matches);
+  if (!hasDraw()) {
+    matches.forEach((match, index) => { match.number = index + 1; });
+    return matches;
   }
 
   const qualifierCount = groupEnabled
@@ -1211,7 +1328,7 @@ function buildMatchSchedule() {
     const extraQualifiers = qualifierCount - finalists.length;
     finalists.push(...Array.from({ length: extraQualifiers }, (_, index) => `Zusatz-Qualifikant ${index + 1}`));
     luckySeeds = extraQualifiers
-      ? Array.from({ length: participantCount - qualifierCount }, (_, index) => `Lucky-Losers-Qualifikant ${index + 1}`)
+      ? Array.from({ length: participantCount - qualifierCount }, (_, index) => `Lucky ${index + 1}`)
       : groups.flatMap((group) => Array.from(
         { length: group.size - perGroup },
         (_, index) => `${perGroup + index + 1}. Gruppe ${group.label}`
@@ -1222,22 +1339,17 @@ function buildMatchSchedule() {
   }
 
   if (groupEnabled && state.configuration.luckyLosers === true) {
-    addPlacementBracket(matches, 'Lucky Losers', luckySeeds, true);
+    addPlacementBracket(bracketMatches, 'Lucky Losers', luckySeeds, true);
   }
   if (placementEnabled) {
     const slots = !groupEnabled && state.drawBracketEntries
       ? state.drawBracketEntries.map((entry) => entry ? drawEntryLabel(entry) : null)
       : null;
-    addPlacementBracket(matches, 'Endrunde', finalists, state.configuration.placementGames === true, slots);
+    addPlacementBracket(bracketMatches, 'Endrunde', finalists, state.configuration.placementGames === true, slots);
   }
-  const lastPhase = matches.some((match) => match.phase === 'Endrunde') ? 'Endrunde' : 'Lucky Losers';
-  const final = matches.find((match) => match.phase === lastPhase && match.label === 'Finale');
-  const thirdPlace = matches.find((match) => match.phase === lastPhase && match.label === 'Spiel um Platz 3');
-  const ordered = matches.filter((match) => match !== final && match !== thirdPlace);
-  if (thirdPlace) ordered.push(thirdPlace);
-  if (final) ordered.push(final);
-  ordered.forEach((match, index) => { match.number = index + 1; });
-  return ordered;
+  matches.push(...orderBracketMatches(bracketMatches));
+  matches.forEach((match, index) => { match.number = index + 1; });
+  return matches;
 }
 
 function renderMatchSchedule(matches) {
