@@ -13,10 +13,10 @@ const DEFAULT_GENERAL_SETTINGS = {
   rules: {
     groupPhase: { startingScore: 301, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'single_out', bullOutRule: 'classic' },
     groupRanking: ['placement', 'wins', 'leg_difference', 'three_dart_average'],
-    luckyLosers: { startingScore: 301, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'single_out', bullOutRule: 'classic' },
-    endRound: { startingScore: 301, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'single_out', bullOutRule: 'classic' },
-    endRoundSemifinal: { startingScore: 301, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'double_out', bullOutRule: 'classic' },
-    endRoundFinal: { startingScore: 501, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'double_out', bullOutRule: 'classic' }
+    luckyLosers: { startingScore: 301, setsToWin: 1, legsToWin: 3, startRule: 'single_in', checkoutRule: 'single_out', bullOutRule: 'classic' },
+    endRound: { startingScore: 301, setsToWin: 1, legsToWin: 3, startRule: 'single_in', checkoutRule: 'single_out', bullOutRule: 'classic' },
+    endRoundSemifinal: { startingScore: 501, setsToWin: 1, legsToWin: 3, startRule: 'single_in', checkoutRule: 'double_out', bullOutRule: 'classic' },
+    endRoundFinal: { startingScore: 501, setsToWin: 1, legsToWin: 4, startRule: 'single_in', checkoutRule: 'double_out', bullOutRule: 'classic' }
   },
   timings: {
     baseMinutesPerLeg: 5,
@@ -55,6 +55,7 @@ const state = {
   currentTournamentStatus: 'draft',
   participationFeeEnabled: true,
   generalSettings: DEFAULT_GENERAL_SETTINGS,
+  databaseResetEnabled: false,
   drawGroups: null,
   drawBracketEntries: null,
   clientConnections: [],
@@ -274,27 +275,51 @@ function renderRulePresetCard(key, title) {
 }
 
 function renderGeneralSettingsContent(selectedPersonId = '') {
+  const selectedPerson = state.persons.find((person) => person.id === selectedPersonId);
   const personOptions = state.persons.map((person) => {
     const name = [person.first_name, person.last_name].filter(Boolean).join(' ');
     const label = person.nickname ? `${name} (${person.nickname})` : name;
     return `<option value="${escapeHtml(person.id)}"${person.id === selectedPersonId ? ' selected' : ''}>${escapeHtml(label)}</option>`;
   }).join('');
+  const avatarDisplayName = selectedPerson?.nickname || selectedPerson?.first_name || '';
+  const avatarPreview = selectedPerson && window.Avatar
+    ? window.Avatar.playerUrl(avatarDisplayName, {
+      size: 64,
+      gender: selectedPerson.gender,
+      letters: 1,
+      color: avatarThemeColors().primaryColor
+    })
+    : window.Avatar
+      ? window.Avatar.personUrl({ size: 64 })
+      : '/logo-mark.svg?v=2';
+  const avatarPreviewAlt = avatarDisplayName
+    ? `Avatar für ${avatarDisplayName}`
+    : 'Geschlechtsspezifischer Standardavatar';
   const rankingOptions = Object.entries(rankingOptionLabels)
     .map(([value, label]) => [value, label]);
   const timings = state.generalSettings.timings;
 
   return `
     <div class="general-settings-grid">
-      <article class="surface settings-category">
+      <article class="surface settings-category settings-user-category">
         <h2>Benutzerverwaltung</h2>
         <p class="settings-help">Wähle einen Spieler aus, um seine gespeicherten Daten zu bearbeiten.</p>
         <form id="personSettingsForm">
-          <div class="settings-field">
-            <label for="settingsPersonSelect">Spieler</label>
-            <select id="settingsPersonSelect" ${state.persons.length ? '' : 'disabled'}>
-              <option value="">${state.persons.length ? 'Spieler auswählen …' : 'Noch keine Spieler vorhanden'}</option>
-              ${personOptions}
-            </select>
+          <div class="settings-user-header">
+            <div class="settings-field">
+              <label for="settingsPersonSelect">Spieler</label>
+              <select id="settingsPersonSelect" ${state.persons.length ? '' : 'disabled'}>
+                <option value="">${state.persons.length ? 'Spieler auswählen …' : 'Noch keine Spieler vorhanden'}</option>
+                ${personOptions}
+              </select>
+            </div>
+            <div class="settings-avatar-editor">
+              <div class="settings-avatar-preview">
+                <img id="settingsPersonAvatar" src="${escapeHtml(avatarPreview)}" alt="${escapeHtml(avatarPreviewAlt)}">
+                <div><strong>Vorschau</strong><span>Avatar wird aus Name und Geschlecht erzeugt.</span></div>
+              </div>
+              <button class="logo-upload-control" id="settingsAvatarChangeButton" type="button" disabled title="Eigene Avatarbilder werden noch nicht unterstützt.">Avatar ändern</button>
+            </div>
           </div>
           <div class="settings-person-fields">
             <div class="settings-field">
@@ -323,39 +348,38 @@ function renderGeneralSettingsContent(selectedPersonId = '') {
         </form>
       </article>
 
-      <article class="surface settings-category">
-        <h2>Lokale Datenbank bereinigen</h2>
-        <p class="settings-help">Löscht vergangene, noch nicht begonnene Turniere sowie nicht angemeldete Spieler und Teams ohne gespielte Partien. Diese Aktion kann nicht rückgängig gemacht werden.</p>
-        <button class="button button-danger" id="cleanupLocalDatabaseButton" type="button">Datenbank bereinigen</button>
-      </article>
-
-      <form class="settings-form" id="generalSettingsForm">
+      <form class="settings-form" id="generalRulesForm">
         <section class="surface settings-category settings-rules-category">
-          <h2>Grund-Regeln</h2>
+          <h2>Regeln</h2>
           <p class="settings-help">Diese Standardwerte werden beim Anlegen eines Turniers vorausgewählt.</p>
           <div class="settings-rule-grid">
             ${renderRulePresetCard('groupPhase', 'Gruppenphase')}
+            <article class="settings-rule-card settings-ranking">
+              <h3>Gruppenwertung</h3>
+              <p class="settings-help">Reihenfolge der Kriterien für die Gruppenplatzierung.</p>
+              <div class="settings-ranking-grid">
+                ${state.generalSettings.rules.groupRanking.map((criterion, index) => `
+                  <div class="settings-field">
+                    <label for="settingsGroupRanking-${index}">${index + 1}. Kriterium</label>
+                    <select id="settingsGroupRanking-${index}" data-ranking-index="${index}">
+                      ${settingsSelectOptions(rankingOptions, criterion)}
+                    </select>
+                  </div>
+                `).join('')}
+              </div>
+            </article>
             ${renderRulePresetCard('luckyLosers', 'Lucky Losers')}
             ${renderRulePresetCard('endRound', 'Endrunde')}
             ${renderRulePresetCard('endRoundSemifinal', 'Endrunde · Halbfinale')}
             ${renderRulePresetCard('endRoundFinal', 'Endrunde · Finale')}
           </div>
-          <div class="settings-ranking">
-            <h3>Gruppenwertung</h3>
-            <p class="settings-help">Reihenfolge der Kriterien für die Gruppenplatzierung.</p>
-            <div class="settings-ranking-grid">
-              ${state.generalSettings.rules.groupRanking.map((criterion, index) => `
-                <div class="settings-field">
-                  <label for="settingsGroupRanking-${index}">${index + 1}. Kriterium</label>
-                  <select id="settingsGroupRanking-${index}" data-ranking-index="${index}">
-                    ${settingsSelectOptions(rankingOptions, criterion)}
-                  </select>
-                </div>
-              `).join('')}
-            </div>
+          <div class="settings-form-actions">
+            <button class="button button-primary" type="submit">Regeln speichern</button>
           </div>
         </section>
+      </form>
 
+      <form class="settings-form" id="generalTimingsForm">
         <section class="surface settings-category">
           <h2>Spielzeiten</h2>
           <p class="settings-help">Zusätzliche Minuten werden zur Grundzeit pro Leg addiert.</p>
@@ -366,7 +390,7 @@ function renderGeneralSettingsContent(selectedPersonId = '') {
             ${settingsNumberInput('timings.additionalMinutesPer200Points', 'Aufschlag je 200 Punkte mehr', timings.additionalMinutesPer200Points)}
           </div>
           <div class="settings-form-actions">
-            <button class="button button-primary" type="submit">Grund-Regeln und Spielzeiten speichern</button>
+            <button class="button button-primary" type="submit">Spielzeiten speichern</button>
           </div>
         </section>
       </form>
@@ -374,6 +398,16 @@ function renderGeneralSettingsContent(selectedPersonId = '') {
       <article class="surface settings-category">
         <h2>Datenbank-Backup</h2>
         <p class="settings-help">Die Eingabe von URL und Port für ein externes Backup wird zu einem späteren Zeitpunkt ergänzt.</p>
+      </article>
+
+      <article class="surface settings-category">
+        <h2>Lokale Datenbank</h2>
+        <p class="settings-help">Löscht vergangene, noch nicht begonnene Turniere sowie nicht angemeldete Spieler und Teams ohne gespielte Partien. Diese Aktion kann nicht rückgängig gemacht werden.</p>
+        <button class="button button-danger" id="cleanupLocalDatabaseButton" type="button">Datenbank bereinigen</button>
+        <div class="database-reset-panel" id="databaseResetControls"${state.databaseResetEnabled ? '' : ' hidden'}>
+          <p class="settings-help">Leert alle Turniere, Personen, Teams und zugehörigen Daten. Nur für Entwicklungs- und Testzwecke.</p>
+          <button class="button button-danger" id="resetDatabaseButton" type="button">Datenbank vollständig zurücksetzen</button>
+        </div>
       </article>
     </div>
   `;
@@ -404,6 +438,22 @@ function bindGeneralSettingsForms(root) {
     root.querySelector('#settingsPersonGender')
   ];
   const savePersonButton = root.querySelector('#savePersonSettingsButton');
+  const personAvatar = root.querySelector('#settingsPersonAvatar');
+  const updateAvatarPreview = () => {
+    if (!window.Avatar || !personAvatar) return;
+    const firstName = personFields[0].value.trim();
+    const nickname = personFields[2].value.trim();
+    const displayName = nickname || firstName;
+    personAvatar.src = window.Avatar.playerUrl(displayName, {
+      size: 64,
+      gender: personFields[3].value,
+      letters: 1,
+      color: avatarThemeColors().primaryColor
+    });
+    personAvatar.alt = displayName
+      ? `Avatar für ${displayName}`
+      : 'Geschlechtsspezifischer Standardavatar';
+  };
   const setPersonFields = () => {
     const person = state.persons.find((item) => item.id === personSelect.value);
     personFields.forEach((field) => {
@@ -411,13 +461,21 @@ function bindGeneralSettingsForms(root) {
       if (!person) field.value = '';
     });
     savePersonButton.disabled = !person;
-    if (!person) return;
+    if (!person) {
+      updateAvatarPreview();
+      return;
+    }
     personFields[0].value = person.first_name;
     personFields[1].value = person.last_name;
     personFields[2].value = person.nickname || '';
     personFields[3].value = person.gender;
+    updateAvatarPreview();
   };
   personSelect.addEventListener('change', setPersonFields);
+  [personFields[0], personFields[2], personFields[3]].forEach((field) => {
+    field.addEventListener('input', updateAvatarPreview);
+    field.addEventListener('change', updateAvatarPreview);
+  });
   setPersonFields();
 
   personForm.addEventListener('submit', async (event) => {
@@ -443,10 +501,9 @@ function bindGeneralSettingsForms(root) {
     }
   });
 
-  const settingsForm = root.querySelector('#generalSettingsForm');
-  settingsForm.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const getValue = (name) => settingsForm.querySelector(`[data-setting="${name}"]`).value;
+  const rulesForm = root.querySelector('#generalRulesForm');
+  const getRuleSettings = () => {
+    const getValue = (name) => rulesForm.querySelector(`[data-setting="${name}"]`).value;
     const getRule = (key) => ({
       startingScore: Number(getValue(`rules.${key}.startingScore`)),
       setsToWin: Number(getValue(`rules.${key}.setsToWin`)),
@@ -455,16 +512,24 @@ function bindGeneralSettingsForms(root) {
       checkoutRule: getValue(`rules.${key}.checkoutRule`),
       bullOutRule: getValue(`rules.${key}.bullOutRule`)
     });
-    const payload = {
+    return {
       rules: {
         groupPhase: getRule('groupPhase'),
         groupRanking: Array.from({ length: 4 }, (_item, index) =>
-          settingsForm.querySelector(`[data-ranking-index="${index}"]`).value),
+          rulesForm.querySelector(`[data-ranking-index="${index}"]`).value),
         luckyLosers: getRule('luckyLosers'),
         endRound: getRule('endRound'),
         endRoundSemifinal: getRule('endRoundSemifinal'),
         endRoundFinal: getRule('endRoundFinal')
       },
+      timings: state.generalSettings.timings
+    };
+  };
+  const timingsForm = root.querySelector('#generalTimingsForm');
+  const getTimingSettings = () => {
+    const getValue = (name) => timingsForm.querySelector(`[data-setting="${name}"]`).value;
+    return {
+      rules: state.generalSettings.rules,
       timings: {
         baseMinutesPerLeg: Number(getValue('timings.baseMinutesPerLeg')),
         doubleInMasterInSurchargeMinutes: Number(getValue('timings.doubleInMasterInSurchargeMinutes')),
@@ -472,18 +537,27 @@ function bindGeneralSettingsForms(root) {
         additionalMinutesPer200Points: Number(getValue('timings.additionalMinutesPer200Points'))
       }
     };
-
+  };
+  const saveSettings = async (payload, successMessage) => {
     try {
       const result = await apiRequest('/api/settings', {
         method: 'PUT',
         body: JSON.stringify(payload)
       });
       state.generalSettings = result.data;
-      renderSettingsView(personSelect.value);
-      showNotice('Die Grund-Regeln und Spielzeiten wurden gespeichert.', 'success');
+      showNotice(successMessage, 'success');
     } catch (error) {
       showNotice(error.message, 'error');
     }
+  };
+
+  rulesForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await saveSettings(getRuleSettings(), 'Die Regeln wurden gespeichert.');
+  });
+  timingsForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await saveSettings(getTimingSettings(), 'Die Spielzeiten wurden gespeichert.');
   });
 
   root.querySelector('#cleanupLocalDatabaseButton').addEventListener('click', async (event) => {
@@ -2358,13 +2432,16 @@ async function loadData() {
 }
 
 async function loadTestTools() {
-  const controls = document.getElementById('databaseResetControls');
   try {
     const result = await apiRequest('/api/test-tools');
-    controls.hidden = result.databaseResetEnabled !== true;
+    state.databaseResetEnabled = result.databaseResetEnabled === true;
+    const controls = document.getElementById('databaseResetControls');
+    if (controls) controls.hidden = !state.databaseResetEnabled;
   } catch (error) {
     console.error('Could not load test tools:', error);
-    controls.hidden = true;
+    state.databaseResetEnabled = false;
+    const controls = document.getElementById('databaseResetControls');
+    if (controls) controls.hidden = true;
   }
 }
 
@@ -2430,7 +2507,10 @@ document.querySelector('[data-step-next]').addEventListener('click', () => {
 
 document.getElementById('refreshButton').addEventListener('click', loadData);
 
-document.getElementById('resetDatabaseButton').addEventListener('click', async () => {
+document.addEventListener('click', async (event) => {
+  const resetDatabaseButton = event.target.closest('#resetDatabaseButton');
+  if (!resetDatabaseButton) return;
+
   if (!window.confirm('Alle Turniere, Personen, Teams und zugehörigen Daten werden endgültig gelöscht. Möchtest du die Testdatenbank wirklich leeren?')) {
     return;
   }

@@ -4,6 +4,20 @@ import { DEFAULT_GENERAL_SETTINGS, parseGeneralSettings } from '../dist/settings
 
 test('general settings defaults satisfy the API schema', () => {
   assert.deepEqual(parseGeneralSettings(DEFAULT_GENERAL_SETTINGS), DEFAULT_GENERAL_SETTINGS);
+  assert.deepEqual({
+    luckyLosers: DEFAULT_GENERAL_SETTINGS.rules.luckyLosers.legsToWin,
+    endRound: DEFAULT_GENERAL_SETTINGS.rules.endRound.legsToWin,
+    endRoundSemifinal: {
+      startingScore: DEFAULT_GENERAL_SETTINGS.rules.endRoundSemifinal.startingScore,
+      legsToWin: DEFAULT_GENERAL_SETTINGS.rules.endRoundSemifinal.legsToWin,
+    },
+    endRoundFinal: DEFAULT_GENERAL_SETTINGS.rules.endRoundFinal.legsToWin,
+  }, {
+    luckyLosers: 3,
+    endRound: 3,
+    endRoundSemifinal: { startingScore: 501, legsToWin: 3 },
+    endRoundFinal: 4,
+  });
 });
 
 test('general settings reject invalid rule values, duplicate ranking criteria, and negative time values', () => {

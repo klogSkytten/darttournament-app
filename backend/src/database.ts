@@ -30,6 +30,11 @@ export async function bootstrapDatabase(pool: Pool = database): Promise<void> {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
 
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        migration_id TEXT PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
       ALTER TABLE tournaments
         DROP COLUMN IF EXISTS description;
 
@@ -409,6 +414,39 @@ export async function bootstrapDatabase(pool: Pool = database): Promise<void> {
       'INSERT INTO general_settings (id, settings) VALUES (1, $1::jsonb) ON CONFLICT (id) DO NOTHING',
       [JSON.stringify(DEFAULT_GENERAL_SETTINGS)],
     );
+    const ruleDefaultsMigration = await client.query(
+      `
+        INSERT INTO schema_migrations (migration_id)
+        VALUES ('20261118_rule_preset_defaults')
+        ON CONFLICT (migration_id) DO NOTHING
+        RETURNING migration_id
+      `,
+    );
+    if (ruleDefaultsMigration.rows.length > 0) {
+      await client.query(
+        `
+          UPDATE general_settings
+          SET settings = jsonb_set(
+            jsonb_set(
+              jsonb_set(
+                jsonb_set(settings, '{rules,luckyLosers}', $1::jsonb),
+                '{rules,endRound}', $2::jsonb
+              ),
+              '{rules,endRoundSemifinal}', $3::jsonb
+            ),
+            '{rules,endRoundFinal}', $4::jsonb
+          ),
+          updated_at = now()
+          WHERE id = 1
+        `,
+        [
+          JSON.stringify(DEFAULT_GENERAL_SETTINGS.rules.luckyLosers),
+          JSON.stringify(DEFAULT_GENERAL_SETTINGS.rules.endRound),
+          JSON.stringify(DEFAULT_GENERAL_SETTINGS.rules.endRoundSemifinal),
+          JSON.stringify(DEFAULT_GENERAL_SETTINGS.rules.endRoundFinal),
+        ],
+      );
+    }
     await client.query('COMMIT');
     console.log('Database schema initialized.');
   } catch (error) {

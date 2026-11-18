@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { Pool } from 'pg';
 import { bootstrapDatabase, cleanupLocalData, database, resetDatabase } from '../dist/database.js';
+import { DEFAULT_GENERAL_SETTINGS } from '../dist/settings.js';
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 
@@ -36,6 +37,7 @@ test('database bootstrap is repeatable and enforces core relationships', {
       [
         'general_settings',
         'persons',
+        'schema_migrations',
         'teams',
         'tournament_board_clients',
         'tournament_entries',
@@ -53,6 +55,11 @@ test('database bootstrap is repeatable and enforces core relationships', {
     );
     const defaultSettings = await testPool.query('SELECT settings FROM general_settings WHERE id = 1');
     assert.equal(defaultSettings.rows[0].settings.rules.groupPhase.startingScore, 301);
+    assert.equal(defaultSettings.rows[0].settings.rules.luckyLosers.legsToWin, 3);
+    assert.equal(defaultSettings.rows[0].settings.rules.endRound.legsToWin, 3);
+    assert.equal(defaultSettings.rows[0].settings.rules.endRoundSemifinal.startingScore, 501);
+    assert.equal(defaultSettings.rows[0].settings.rules.endRoundSemifinal.legsToWin, 3);
+    assert.equal(defaultSettings.rows[0].settings.rules.endRoundFinal.legsToWin, 4);
     await testPool.query(
       'UPDATE general_settings SET settings = $1::jsonb WHERE id = 1',
       [JSON.stringify({ custom: true })],
@@ -314,6 +321,23 @@ test('database bootstrap is repeatable and enforces core relationships', {
       connectionString: testDatabaseUrl,
       options: `-c search_path=${upgradeSchemaName},public`,
     });
+    const existingSettings = structuredClone(DEFAULT_GENERAL_SETTINGS);
+    existingSettings.rules.luckyLosers.legsToWin = 2;
+    existingSettings.rules.endRound.legsToWin = 2;
+    existingSettings.rules.endRoundSemifinal.startingScore = 301;
+    existingSettings.rules.endRoundSemifinal.legsToWin = 2;
+    existingSettings.rules.endRoundFinal.legsToWin = 2;
+    await upgradePool.query(`
+      CREATE TABLE general_settings (
+        id SMALLINT PRIMARY KEY,
+        settings JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await upgradePool.query(
+      'INSERT INTO general_settings (id, settings) VALUES (1, $1::jsonb)',
+      [JSON.stringify(existingSettings)],
+    );
     await upgradePool.query(`
       CREATE TABLE tournaments (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -337,6 +361,13 @@ test('database bootstrap is repeatable and enforces core relationships', {
     assert.deepEqual(upgradedTournament.rows, [
       { name: 'Existing tournament', dartboard_count: 0, participation_fee_enabled: false },
     ]);
+    const migratedSettings = await upgradePool.query('SELECT settings FROM general_settings WHERE id = 1');
+    assert.equal(migratedSettings.rows[0].settings.rules.luckyLosers.legsToWin, 3);
+    assert.equal(migratedSettings.rows[0].settings.rules.endRound.legsToWin, 3);
+    assert.equal(migratedSettings.rows[0].settings.rules.endRoundSemifinal.startingScore, 501);
+    assert.equal(migratedSettings.rows[0].settings.rules.endRoundSemifinal.legsToWin, 3);
+    assert.equal(migratedSettings.rows[0].settings.rules.endRoundFinal.legsToWin, 4);
+    assert.equal(migratedSettings.rows[0].settings.rules.groupPhase.legsToWin, 2);
     const upgradeDefault = await upgradePool.query(
       `SELECT column_default FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'tournaments' AND column_name = 'participation_fee_enabled'`,
       [upgradeSchemaName],

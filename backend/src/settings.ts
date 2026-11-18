@@ -40,7 +40,7 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
     luckyLosers: {
       startingScore: 301,
       setsToWin: 1,
-      legsToWin: 2,
+      legsToWin: 3,
       startRule: 'single_in',
       checkoutRule: 'single_out',
       bullOutRule: 'classic',
@@ -48,15 +48,15 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
     endRound: {
       startingScore: 301,
       setsToWin: 1,
-      legsToWin: 2,
+      legsToWin: 3,
       startRule: 'single_in',
       checkoutRule: 'single_out',
       bullOutRule: 'classic',
     },
     endRoundSemifinal: {
-      startingScore: 301,
+      startingScore: 501,
       setsToWin: 1,
-      legsToWin: 2,
+      legsToWin: 3,
       startRule: 'single_in',
       checkoutRule: 'double_out',
       bullOutRule: 'classic',
@@ -64,7 +64,7 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
     endRoundFinal: {
       startingScore: 501,
       setsToWin: 1,
-      legsToWin: 2,
+      legsToWin: 4,
       startRule: 'single_in',
       checkoutRule: 'double_out',
       bullOutRule: 'classic',

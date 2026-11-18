@@ -34,10 +34,10 @@ async function createApp() {
       rules: {
         groupPhase: { startingScore: 301, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'single_out', bullOutRule: 'classic' },
         groupRanking: ['placement', 'wins', 'leg_difference', 'three_dart_average'],
-        luckyLosers: { startingScore: 301, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'single_out', bullOutRule: 'classic' },
-        endRound: { startingScore: 301, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'single_out', bullOutRule: 'classic' },
-        endRoundSemifinal: { startingScore: 301, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'double_out', bullOutRule: 'classic' },
-        endRoundFinal: { startingScore: 501, setsToWin: 1, legsToWin: 2, startRule: 'single_in', checkoutRule: 'double_out', bullOutRule: 'classic' }
+        luckyLosers: { startingScore: 301, setsToWin: 1, legsToWin: 3, startRule: 'single_in', checkoutRule: 'single_out', bullOutRule: 'classic' },
+        endRound: { startingScore: 301, setsToWin: 1, legsToWin: 3, startRule: 'single_in', checkoutRule: 'single_out', bullOutRule: 'classic' },
+        endRoundSemifinal: { startingScore: 501, setsToWin: 1, legsToWin: 3, startRule: 'single_in', checkoutRule: 'double_out', bullOutRule: 'classic' },
+        endRoundFinal: { startingScore: 501, setsToWin: 1, legsToWin: 4, startRule: 'single_in', checkoutRule: 'double_out', bullOutRule: 'classic' }
       },
       timings: {
         baseMinutesPerLeg: 5,
@@ -129,7 +129,7 @@ test('rules step uses saved settings for phase and round presets', async () => {
   `, context);
   const markup = vm.runInContext(`renderRulesStep({ id: 6, title: 'Regeln' })`, context);
   assert.match(markup, /<select id="start-group" data-config><option>301<\/option><option selected>501<\/option>/);
-  assert.match(markup, /<select id="start-round-5" data-config><option selected>301<\/option>/);
+  assert.match(markup, /<select id="start-round-5" data-config><option>301<\/option><option selected>501<\/option>/);
   assert.match(markup, /<select id="start-round-6" data-config><option>301<\/option><option>501<\/option><option selected>701<\/option>/);
   assert.match(markup, /name="out-group" type="radio" value="Single Out" data-config checked/);
   assert.match(markup, /name="out-round-5" type="radio" value="Double Out" data-config checked/);
@@ -138,18 +138,42 @@ test('rules step uses saved settings for phase and round presets', async () => {
 
 test('general settings view contains player, rule, timing, cleanup, and backup categories', async () => {
   const { context } = await createApp();
+  vm.runInContext('state.databaseResetEnabled = true', context);
+  const defaultRules = JSON.parse(vm.runInContext('JSON.stringify(DEFAULT_GENERAL_SETTINGS.rules)', context));
   const markup = vm.runInContext('renderGeneralSettingsContent()', context);
+  assert.equal(defaultRules.luckyLosers.legsToWin, 3);
+  assert.equal(defaultRules.endRound.legsToWin, 3);
+  assert.equal(defaultRules.endRoundSemifinal.startingScore, 501);
+  assert.equal(defaultRules.endRoundSemifinal.legsToWin, 3);
+  assert.equal(defaultRules.endRoundFinal.legsToWin, 4);
   for (const category of [
     'Benutzerverwaltung',
-    'Grund-Regeln',
+    'Regeln',
     'Spielzeiten',
-    'Lokale Datenbank bereinigen',
+    'Lokale Datenbank',
     'Datenbank-Backup'
   ]) {
     assert.ok(markup.includes(category));
   }
   assert.ok(markup.includes('value="5" required'));
   assert.ok(markup.includes('value="501"'));
+  assert.ok(markup.includes('id="generalRulesForm"'));
+  assert.ok(markup.includes('id="generalTimingsForm"'));
+  assert.ok(markup.includes('Regeln speichern'));
+  assert.ok(markup.includes('Spielzeiten speichern'));
+  assert.ok(!markup.includes('Grund-Regeln'));
+  assert.ok(markup.includes('class="surface settings-category settings-user-category"'));
+  assert.ok(markup.includes('id="settingsPersonAvatar"'));
+  assert.ok(markup.includes('id="settingsAvatarChangeButton" type="button" disabled'));
+  assert.ok(markup.includes('<div class="database-reset-panel" id="databaseResetControls">'));
+  const resetPanelMarkup = markup.slice(markup.indexOf('id="databaseResetControls"'));
+  assert.ok(resetPanelMarkup.indexOf('<p class="settings-help">') < resetPanelMarkup.indexOf('<button class="button button-danger" id="resetDatabaseButton"'));
+  assert.ok(markup.indexOf('<h3>Gruppenphase</h3>') < markup.indexOf('<h3>Gruppenwertung</h3>'));
+  assert.ok(markup.indexOf('<h3>Gruppenwertung</h3>') < markup.indexOf('<h3>Lucky Losers</h3>'));
+  assert.ok(markup.indexOf('<h3>Lucky Losers</h3>') < markup.indexOf('<h3>Endrunde</h3>'));
+  assert.ok(markup.indexOf('<h3>Endrunde</h3>') < markup.indexOf('<h3>Endrunde · Halbfinale</h3>'));
+  assert.ok(markup.indexOf('<h3>Endrunde · Halbfinale</h3>') < markup.indexOf('<h3>Endrunde · Finale</h3>'));
+  assert.ok(markup.indexOf('<h2>Datenbank-Backup</h2>') < markup.indexOf('<h2>Lokale Datenbank</h2>'));
 });
 
 test('reloading preserves manual settings unless the participant count changes', async () => {
