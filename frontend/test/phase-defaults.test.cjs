@@ -16,6 +16,8 @@ async function createApp() {
   const ids = [
     'notice', 'tournamentCount', 'runningCount', 'finishedCount', 'tournamentsList',
     'tournamentEmptyTemplate', 'tournamentParticipantCount', 'tournamentGroupCount',
+    'tournamentGamesPerPlayer', 'tournamentGroupGames', 'tournamentLuckyGames', 'tournamentFinalGames',
+    'tournamentGroupDuration', 'tournamentLuckyDuration', 'tournamentFinalDuration',
     'workflowStatusBadge', 'workflowStatusLabel', 'workflowTournamentName',
     'refreshButton', 'resetDatabaseButton', 'databaseResetControls',
     'backendHealthStatus', 'databaseHealthStatus', 'broadcastStatus'
@@ -64,7 +66,7 @@ async function createApp() {
   const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
   vm.runInContext(source, context);
   await new Promise((resolve) => setImmediate(resolve));
-  return { context, responses };
+  return { context, responses, elements };
 }
 
 test('phase defaults follow participant count at qualifier boundaries', async () => {
@@ -123,17 +125,28 @@ test('group count input is bounded by the number of groups with at least four pa
 test('rules step uses saved settings for phase and round presets', async () => {
   const { context } = await createApp();
   vm.runInContext(`
+    state.generalSettings.rules.endRound.legsToWin = 4;
     state.generalSettings.rules.groupPhase.startingScore = 501;
     state.generalSettings.rules.groupRanking = ['wins', 'placement', 'leg_difference', 'three_dart_average'];
     state.generalSettings.rules.endRoundFinal.startingScore = 701;
+    state.configuration['legs-group'] = '6';
+    state.configuration['groupRanking-0'] = '3-Dart-Average';
+    resetTournamentRuleConfiguration();
   `, context);
   const markup = vm.runInContext(`renderRulesStep({ id: 6, title: 'Regeln' })`, context);
   assert.match(markup, /<select id="start-group" data-config><option>301<\/option><option selected>501<\/option>/);
+  assert.match(markup, /<select id="legs-lucky" data-config><option>2<\/option><option selected>3<\/option>/);
+  assert.match(markup, /<select id="legs-round-1" data-config><option>2<\/option><option>3<\/option><option selected>4<\/option>/);
   assert.match(markup, /<select id="start-round-5" data-config><option>301<\/option><option selected>501<\/option>/);
+  assert.match(markup, /<select id="legs-round-5" data-config><option>2<\/option><option selected>3<\/option><option>4<\/option>/);
   assert.match(markup, /<select id="start-round-6" data-config><option>301<\/option><option>501<\/option><option selected>701<\/option>/);
+  assert.match(markup, /<select id="legs-round-6" data-config><option>2<\/option><option>3<\/option><option selected>4<\/option>/);
+  assert.match(markup, /<select id="legs-round-7" data-config><option>2<\/option><option>3<\/option><option selected>4<\/option>/);
   assert.match(markup, /name="out-group" type="radio" value="Single Out" data-config checked/);
   assert.match(markup, /name="out-round-5" type="radio" value="Double Out" data-config checked/);
   assert.ok(markup.includes('id="groupRanking-0" data-config><option></option><option>Platzierung</option><option selected>Siege</option>'));
+  assert.match(markup, /Regeln lassen sich anpassen, solange die jeweilige Phase noch nicht begonnen hat\./);
+  assert.doesNotMatch(markup, /Frontend-Vorschau/);
 });
 
 test('general settings view contains player, rule, timing, cleanup, and backup categories', async () => {
@@ -470,6 +483,79 @@ test('schedule counts agree with badges across phase settings and byes', async (
     })()
   `, context);
   assert.equal(error, null);
+});
+
+test('duration badges follow rules, board count, placement rounds, and ten-minute rounding', async () => {
+  const { context } = await createApp();
+  const actual = JSON.parse(vm.runInContext(`
+    (() => {
+      state.currentTournamentId = 't';
+      state.entries = Array.from({ length: 8 }, (_, id) => ({ id, tournament_id: 't' }));
+      resetPhaseDefaults(8);
+      state.configuration.boardCount = '1';
+      updateTournamentMetrics();
+      const oneBoard = {
+        groupGames: document.getElementById('tournamentGroupGames').textContent,
+        groupDuration: document.getElementById('tournamentGroupDuration').textContent,
+        finalDuration: document.getElementById('tournamentFinalDuration').textContent
+      };
+      state.configuration.boardCount = '3';
+      updateTournamentMetrics();
+      const threeBoards = {
+        groupDuration: document.getElementById('tournamentGroupDuration').textContent,
+        finalDuration: document.getElementById('tournamentFinalDuration').textContent
+      };
+      state.configuration.groupCount = '1';
+      updateTournamentMetrics();
+      const changedGroupCount = {
+        groupGames: document.getElementById('tournamentGroupGames').textContent,
+        groupDuration: document.getElementById('tournamentGroupDuration').textContent
+      };
+      state.configuration.groupCount = '2';
+      state.configuration['legs-group'] = '3';
+      updateTournamentMetrics();
+      const updatedGroupRule = document.getElementById('tournamentGroupDuration').textContent;
+      const surchargePreset = {
+        startingScore: 501,
+        setsToWin: 1,
+        legsToWin: 2,
+        startRule: 'double_in',
+        checkoutRule: 'double_out'
+      };
+      return JSON.stringify({
+        oneBoard,
+        threeBoards,
+        changedGroupCount,
+        updatedGroupRule,
+        surchargeDuration: formatDurationMinutes(estimateDurationMinutes(
+          1, surchargePreset, 1, state.generalSettings.timings
+        )),
+        placementRoundCounts: placementBracketRuleCounts(8, true)
+      });
+    })()
+  `, context));
+
+  assert.deepEqual(actual.oneBoard, {
+    groupGames: '12',
+    groupDuration: '2:00',
+    finalDuration: '5:20'
+  });
+  assert.deepEqual(actual.threeBoards, {
+    groupDuration: '0:40',
+    finalDuration: '1:50'
+  });
+  assert.deepEqual(actual.changedGroupCount, {
+    groupGames: '28',
+    groupDuration: '1:30'
+  });
+  assert.equal(actual.updatedGroupRule, '1:20');
+  assert.equal(actual.surchargeDuration, '0:30');
+  assert.deepEqual(actual.placementRoundCounts, {
+    'round-4': 4,
+    'round-5': 2,
+    'round-6': 1,
+    'round-7': 5
+  });
 });
 
 test('the final remains last when only lucky losers are enabled', async () => {

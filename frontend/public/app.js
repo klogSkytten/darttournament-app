@@ -616,6 +616,7 @@ async function loadGeneralSettings() {
     const result = await apiRequest('/api/settings');
     state.generalSettings = result.data;
     if (state.activeView === 3 && state.currentStep === 6) renderStep();
+    else updateTournamentMetrics();
   } catch (error) {
     console.error('Could not load general settings:', error);
     showNotice(`Die allgemeinen Einstellungen konnten nicht geladen werden: ${error.message}`, 'error');
@@ -1129,6 +1130,112 @@ function syncPhaseDependencies() {
   });
 }
 
+function generalSettingsKeyForPhase(name, rulePhase) {
+  if (rulePhase === 'group') return 'groupPhase';
+  if (rulePhase === 'lucky') return 'luckyLosers';
+  if (name === 'Halbfinale') return 'endRoundSemifinal';
+  if (name === 'Finale') return 'endRoundFinal';
+  return 'endRound';
+}
+
+function getConfiguredRulePreset(settingsKey, phaseKey) {
+  const preset = state.generalSettings.rules[settingsKey];
+  const legacySuffix = { group: '0', lucky: '2', 'round-1': '1' }[phaseKey];
+  const getValue = (field, fallback) => {
+    const key = `${field}-${phaseKey}`;
+    if (Object.hasOwn(state.configuration, key)) return state.configuration[key];
+    const legacyKey = legacySuffix ? `${field}-${legacySuffix}` : null;
+    if (legacyKey && Object.hasOwn(state.configuration, legacyKey)) return state.configuration[legacyKey];
+    return fallback;
+  };
+  const inputRuleValues = {
+    'Single In': 'single_in',
+    'Double In': 'double_in',
+    'Master In': 'master_in',
+    'Single Out': 'single_out',
+    'Double Out': 'double_out',
+    'Master Out': 'master_out',
+    'no Bull-Off': 'no_bullout',
+    classic: 'classic',
+    PDC: 'pdc'
+  };
+  const startRule = getValue('in', preset.startRule);
+  const checkoutRule = getValue('out', preset.checkoutRule);
+  const bullOutRule = getValue('bull', preset.bullOutRule);
+  return {
+    startingScore: Number(getValue('start', preset.startingScore)),
+    setsToWin: Number(getValue('sets', preset.setsToWin)),
+    legsToWin: Number(getValue('legs', preset.legsToWin)),
+    startRule: inputRuleValues[startRule] || startRule,
+    checkoutRule: inputRuleValues[checkoutRule] || checkoutRule,
+    bullOutRule: inputRuleValues[bullOutRule] || bullOutRule
+  };
+}
+
+function placementBracketRuleCounts(entryCount, placementGames) {
+  if (!Number.isSafeInteger(entryCount) || entryCount < 2) return {};
+  const bracketSize = nextBracketSize(entryCount);
+  const firstRound = 7 - Math.log2(bracketSize);
+  const matches = [];
+  addPlacementBracket(
+    matches,
+    'Endrunde',
+    Array.from({ length: entryCount }, (_item, index) => `Teilnehmer ${index + 1}`),
+    placementGames
+  );
+  return matches.reduce((counts, match) => {
+    const roundKey = match.rankStart > 1
+      ? 'round-7'
+      : `round-${firstRound + match.bracketRound}`;
+    counts[roundKey] = (counts[roundKey] || 0) + 1;
+    return counts;
+  }, {});
+}
+
+function estimateMatchDurationMinutes(preset, timings) {
+  const maxLegs = (2 * preset.setsToWin - 1) * (2 * preset.legsToWin - 1);
+  const countedLegs = Math.max(0, maxLegs - 1);
+  const scoreSurcharge = Math.ceil(Math.max(0, preset.startingScore - 301) / 200)
+    * timings.additionalMinutesPer200Points;
+  const startSurcharge = preset.startRule === 'single_in' ? 0 : timings.doubleInMasterInSurchargeMinutes;
+  const checkoutSurcharge = preset.checkoutRule === 'single_out' ? 0 : timings.doubleOutMasterOutSurchargeMinutes;
+  return countedLegs * (
+    timings.baseMinutesPerLeg + scoreSurcharge + startSurcharge + checkoutSurcharge
+  );
+}
+
+function roundDurationMinutes(minutes, boardCount) {
+  if (!Number.isFinite(minutes) || !Number.isFinite(boardCount) || boardCount < 1) return null;
+  return Math.round(minutes / boardCount / 10) * 10;
+}
+
+function estimateDurationMinutes(gameCount, preset, boardCount, timings) {
+  if (!Number.isFinite(gameCount) || gameCount < 0) return null;
+  if (gameCount === 0) return 0;
+  return roundDurationMinutes(gameCount * estimateMatchDurationMinutes(preset, timings), boardCount);
+}
+
+function estimatePlacementDurationMinutes(entryCount, placementGames, boardCount, timings) {
+  if (!Number.isSafeInteger(entryCount) || entryCount < 0) return null;
+  const ruleCounts = placementBracketRuleCounts(entryCount, placementGames);
+  if (Object.keys(ruleCounts).length === 0) return 0;
+  const minutes = Object.entries(ruleCounts).reduce((total, [roundKey, gameCount]) => {
+    const settingsKey = roundKey === 'round-5'
+      ? 'endRoundSemifinal'
+      : roundKey === 'round-6'
+        ? 'endRoundFinal'
+        : 'endRound';
+    const preset = getConfiguredRulePreset(settingsKey, roundKey);
+    return total + gameCount * estimateMatchDurationMinutes(preset, timings);
+  }, 0);
+  return roundDurationMinutes(minutes, boardCount);
+}
+
+function formatDurationMinutes(minutes) {
+  if (minutes === null) return '–';
+  return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}`;
+}
+
 function renderRulesStep(section) {
   const placementRounds = [
     '1. Runde',
@@ -1154,18 +1261,11 @@ function renderRulesStep(section) {
     classic: 'classic',
     pdc: 'PDC'
   };
-  const presetForPhase = (name, rulePhase) => {
-    const key = rulePhase === 'group'
-      ? 'groupPhase'
-      : rulePhase === 'lucky'
-        ? 'luckyLosers'
-        : name === 'Halbfinale'
-          ? 'endRoundSemifinal'
-          : name === 'Finale'
-            ? 'endRoundFinal'
-            : 'endRound';
-    const preset = state.generalSettings.rules[key];
-    return {
+  const renderPhaseCard = ({ name, key, legacyKey, includeRanking, rulePhase, minQualifiers, exactQualifiers, additionalPlacementGames }) => {
+    const configId = (field) => `${field}-${key}`;
+    const legacyId = (field) => legacyKey ? `${field}-${legacyKey}` : undefined;
+    const preset = getConfiguredRulePreset(generalSettingsKeyForPhase(name, rulePhase), key);
+    const defaults = {
       start: String(preset.startingScore),
       sets: String(preset.setsToWin),
       legs: String(preset.legsToWin),
@@ -1173,11 +1273,6 @@ function renderRulesStep(section) {
       out: ruleLabels[preset.checkoutRule],
       bull: ruleLabels[preset.bullOutRule]
     };
-  };
-  const renderPhaseCard = ({ name, key, legacyKey, includeRanking, rulePhase, minQualifiers, exactQualifiers, additionalPlacementGames }) => {
-    const configId = (field) => `${field}-${key}`;
-    const legacyId = (field) => legacyKey ? `${field}-${legacyKey}` : undefined;
-    const defaults = presetForPhase(name, rulePhase);
     const visibilityAttributes = [
       rulePhase ? `data-rule-phase="${rulePhase}"` : '',
       minQualifiers ? `data-min-qualifiers="${minQualifiers}"` : '',
@@ -1250,7 +1345,7 @@ function renderRulesStep(section) {
     </article>
   `;
   return `${stepHeading(section)}
-    <div class="alert alert-info info-banner"><strong>Info:</strong> Regeln lassen sich anpassen, solange die jeweilige Phase noch nicht begonnen hat. Die folgenden Auswahlfelder sind derzeit eine Frontend-Vorschau.</div>
+    <div class="alert alert-info info-banner"><strong>Info:</strong> Regeln lassen sich anpassen, solange die jeweilige Phase noch nicht begonnen hat.</div>
     <div class="phase-card-grid" data-rules-grid>${groupCard}${placementCard}${luckyCard}</div>`;
 }
 
@@ -1951,10 +2046,39 @@ function updateTournamentMetrics() {
   const gamesPerPair = inputValue('gamesPerPair', Number(state.configuration.gamesPerPair));
   const qualifierCount = inputValue('qualifierCount', Number(state.configuration.qualifierCount),
     (value) => largestQualifierPower(value) === value);
+  const boardCount = inputValue('boardCount', Number(state.configuration.boardCount ?? '1'),
+    (value) => Number.isSafeInteger(value) && value >= 1);
+  const participantCountValue = currentTournamentEntries().length;
   const metrics = calculateTournamentMetrics(currentTournamentEntries().length, groupCount, gamesPerPair, {
     ...state.configuration,
     qualifierCount
   });
+  const timings = state.generalSettings.timings;
+  const groupDuration = estimateDurationMinutes(
+    metrics.groupGames,
+    getConfiguredRulePreset('groupPhase', 'group'),
+    boardCount,
+    timings
+  );
+  const luckyDuration = estimateDurationMinutes(
+    metrics.luckyGames,
+    getConfiguredRulePreset('luckyLosers', 'lucky'),
+    boardCount,
+    timings
+  );
+  const finalEntries = state.configuration.groupPhaseEnabled === false
+    ? participantCountValue
+    : qualifierCount === null ? null : Math.min(participantCountValue, qualifierCount);
+  const finalDuration = metrics.finalGames === null
+    ? null
+    : metrics.finalGames === 0
+      ? 0
+      : estimatePlacementDurationMinutes(
+        finalEntries,
+        state.configuration.placementGames === true,
+        boardCount,
+        timings
+      );
   const display = (value) => value === null ? '–' : String(value);
   const participantCount = document.getElementById('tournamentParticipantCount');
   if (participantCount) participantCount.textContent = String(currentTournamentEntries().length);
@@ -1970,6 +2094,12 @@ function updateTournamentMetrics() {
   if (luckyGames) luckyGames.textContent = display(metrics.luckyGames);
   const finalGames = document.getElementById('tournamentFinalGames');
   if (finalGames) finalGames.textContent = display(metrics.finalGames);
+  const groupDurationBadge = document.getElementById('tournamentGroupDuration');
+  if (groupDurationBadge) groupDurationBadge.textContent = formatDurationMinutes(groupDuration);
+  const luckyDurationBadge = document.getElementById('tournamentLuckyDuration');
+  if (luckyDurationBadge) luckyDurationBadge.textContent = formatDurationMinutes(luckyDuration);
+  const finalDurationBadge = document.getElementById('tournamentFinalDuration');
+  if (finalDurationBadge) finalDurationBadge.textContent = formatDurationMinutes(finalDuration);
 }
 
 function updateStepControls() {
@@ -2230,7 +2360,7 @@ function bindStepActions() {
       else if (control.type === 'radio') control.checked = control.value === state.configuration[key];
       else control.value = state.configuration[key];
     }
-    if (['groupCount', 'gamesPerPair', 'qualifierCount'].includes(key)) {
+    if (['groupCount', 'gamesPerPair', 'qualifierCount', 'boardCount'].includes(key)) {
       control.addEventListener('input', updateTournamentMetrics);
     }
     control.addEventListener('change', () => {

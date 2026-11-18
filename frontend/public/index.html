@@ -88,10 +88,7 @@
         <section class="view settings-view" id="view-2" data-view-panel="2" aria-labelledby="settingsTitle" hidden>
           <div class="settings-topline">
             <span class="section-kicker">ALLGEMEINE EINSTELLUNGEN</span>
-            <button class="back-button" type="button" data-view="1">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6M9 12h11" /></svg>
-              zurück
-            </button>
+            <button class="back-button" type="button" data-view="1">zurück</button>
           </div>
           <div class="settings-content">
             <h1 id="settingsTitle">Einstellungen</h1>
@@ -114,9 +111,9 @@
                 <span class="tournament-metric-badge"><span id="tournamentParticipantCount">0</span> Teilnehmer</span>
                 <span class="tournament-metric-badge" id="tournamentGroupCount">1 Gruppe</span>
                 <span class="tournament-metric-badge" id="tournamentGamesPerPlayer">0 bis 0 Spiele/Spieler</span>
-                <span class="tournament-metric-badge"><span id="tournamentGroupGames">0</span> Gruppenspiele (~x:xx h)</span>
-                <span class="tournament-metric-badge"><span id="tournamentLuckyGames">0</span> Lucky Loser Spiele (~x:xx h)</span>
-                <span class="tournament-metric-badge"><span id="tournamentFinalGames">0</span> Endrundenspiele (~x:xx h)</span>
+                <span class="tournament-metric-badge"><span id="tournamentGroupGames">0</span> Gruppenspiele (~<span id="tournamentGroupDuration">0:00</span> h)</span>
+                <span class="tournament-metric-badge"><span id="tournamentLuckyGames">0</span> Lucky Loser Spiele (~<span id="tournamentLuckyDuration">0:00</span> h)</span>
+                <span class="tournament-metric-badge"><span id="tournamentFinalGames">0</span> Endrundenspiele (~<span id="tournamentFinalDuration">0:00</span> h)</span>
               </div>
               <span class="tournament-status-badge" id="workflowStatusBadge" data-status="draft"><span class="status-dot"></span><span id="workflowStatusLabel">Entwurf</span></span>
             </div>
