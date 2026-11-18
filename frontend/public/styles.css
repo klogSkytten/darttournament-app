@@ -806,7 +806,8 @@ body::before {
 .field textarea { min-height: 74px; resize: none; }
 .field input::placeholder,
 .field textarea::placeholder { color: #a0aec0; }
-.field input[readonly] { background: #f1f5f9; color: var(--muted); cursor: not-allowed; }
+.field input[readonly],
+.field input:disabled { background: #f1f5f9; color: var(--muted); cursor: not-allowed; }
 .field-hint { color: var(--muted); font-size: 10px; }
 
 .logo-upload-card {

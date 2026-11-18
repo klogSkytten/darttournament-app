@@ -72,6 +72,38 @@ test('phase defaults follow participant count at qualifier boundaries', async ()
   }
 });
 
+test('qualifier input is disabled when fewer than four participants are registered', async () => {
+  const { context } = await createApp();
+  for (const [count, expectedDisabled] of [[3, true], [4, false]]) {
+    const disabled = vm.runInContext(`
+      state.currentTournamentId = 't';
+      state.entries = Array.from({ length: ${count} }, (_, id) => ({ id, tournament_id: 't' }));
+      resetPhaseDefaults(${count});
+      (() => {
+        const input = renderModeStep({ id: 5, title: 'Turnierphasen' })
+          .match(/<input id="qualifierCount"[^>]*>/)[0];
+        return /\\sdisabled(?:\\s|>)/.test(input);
+      })();
+    `, context);
+    assert.equal(disabled, expectedDisabled);
+  }
+});
+
+test('group count input is bounded by the number of groups with at least four participants', async () => {
+  const { context } = await createApp();
+  for (const [count, expectedMaximum] of [[0, 1], [3, 1], [4, 1], [7, 1], [8, 2], [11, 2], [12, 3]]) {
+    const input = vm.runInContext(`
+      state.currentTournamentId = 't';
+      state.entries = Array.from({ length: ${count} }, (_, id) => ({ id, tournament_id: 't' }));
+      resetPhaseDefaults(${count});
+      (() => renderModeStep({ id: 5, title: 'Turnierphasen' })
+        .match(/<input id="groupCount"[^>]*>/)[0])();
+    `, context);
+    assert.match(input, /min="1"/);
+    assert.ok(input.includes(`max="${expectedMaximum}"`));
+  }
+});
+
 test('reloading preserves manual settings unless the participant count changes', async () => {
   const { context, responses } = await createApp();
   const tournament = { id: 't1', name: 'Test', status: 'open' };

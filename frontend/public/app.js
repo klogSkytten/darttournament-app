@@ -591,6 +591,7 @@ function radioOptions(name, label, options, selected, legacyName) {
 
 function renderModeStep(section) {
   const participantCount = currentTournamentEntries().length;
+  const maxGroupCount = defaultGroupCount(participantCount);
   const maxQualifierCount = largestQualifierPower(participantCount);
   const configuredQualifierCount = Number(state.configuration.qualifierCount ?? Math.max(4, maxQualifierCount));
   const qualifierCount = maxQualifierCount >= 4
@@ -615,7 +616,7 @@ function renderModeStep(section) {
           </div>
         </div>
         <div class="group-settings">
-          ${groupNumberInput('groupCount', 'Gruppen', currentGroupCount())}
+          ${groupNumberInput('groupCount', 'Gruppen', currentGroupCount(), maxGroupCount)}
           ${groupNumberInput('gamesPerPair', 'Spiele gegeneinander', state.configuration.gamesPerPair ?? 1)}
           <div class="field" id="qualifierCountField">
             <label for="qualifierCount">Qualifikanten für Endrunde</label>
