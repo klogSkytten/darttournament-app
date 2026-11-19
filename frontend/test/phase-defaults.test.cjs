@@ -49,6 +49,7 @@ async function createApp() {
       }
     }
   };
+  const requests = [];
   const context = vm.createContext({
     document: {
       getElementById: (id) => elements[id] || null,
@@ -57,16 +58,22 @@ async function createApp() {
       addEventListener() {}
     },
     window: { setInterval() {}, setTimeout() {}, clearTimeout() {} },
-    fetch: async (url) => ({
-      ok: true,
-      json: async () => ({ ok: true, data: responses[url] || [], checks: { database: 'ok' } })
-    }),
+    fetch: async (url, options = {}) => {
+      requests.push({ url, options });
+      const data = Object.hasOwn(responses, url)
+        ? responses[url]
+        : url.endsWith('/draw') ? null : [];
+      return {
+        ok: true,
+        json: async () => ({ ok: true, data, checks: { database: 'ok' } })
+      };
+    },
     console
   });
   const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
   vm.runInContext(source, context);
   await new Promise((resolve) => setImmediate(resolve));
-  return { context, responses, elements };
+  return { context, responses, requests, elements };
 }
 
 test('phase defaults follow participant count at qualifier boundaries', async () => {
@@ -229,17 +236,19 @@ test('reloading preserves manual settings unless the participant count changes',
 
 test('switching tournaments uses defaults for the selected tournament', async () => {
   const { context } = await createApp();
-  vm.runInContext(`
-    state.tournaments = [
-      { id: 'a', name: 'A', status: 'open' },
-      { id: 'b', name: 'B', status: 'open' }
-    ];
-    state.entries = Array.from({ length: 10 }, (_, id) => ({ id, tournament_id: 'b' }));
-    openTournament('a');
-    state.configuration['start-group'] = '701';
-    state.configuration['groupRanking-0'] = 'Siege';
-    state.configuration.gamesPerPair = '3';
-    openTournament('b');
+  await vm.runInContext(`
+    (async () => {
+      state.tournaments = [
+        { id: 'a', name: 'A', status: 'open' },
+        { id: 'b', name: 'B', status: 'open' }
+      ];
+      state.entries = Array.from({ length: 10 }, (_, id) => ({ id, tournament_id: 'b' }));
+      await openTournament('a');
+      state.configuration['start-group'] = '701';
+      state.configuration['groupRanking-0'] = 'Siege';
+      state.configuration.gamesPerPair = '3';
+      await openTournament('b');
+    })()
   `, context);
   assert.equal(vm.runInContext('state.configuration.gamesPerPair', context), '1');
   assert.equal(vm.runInContext('state.configuration.qualifierCount', context), '8');
@@ -434,6 +443,151 @@ test('draw labels use short Lucky placeholders', async () => {
   `, context);
   assert.match(result, /Lucky 1/);
   assert.doesNotMatch(result, /Nicht-Qualifikant/);
+});
+
+test('draw persists groups and seeded first rounds and restores the schedule', async () => {
+  const { context, responses, requests } = await createApp();
+  const entryIds = Array.from({ length: 24 }, (_, index) =>
+    `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`);
+  vm.runInContext(`
+    state.currentTournamentId = 't';
+    state.currentTournamentName = 'Testturnier';
+    state.tournaments = [{ id: 't', name: 'Testturnier', status: 'open' }];
+    state.entries = ${JSON.stringify(entryIds)}.map((id) => ({ id, tournament_id: 't' }));
+    resetPhaseDefaults(24);
+    state.configuration.groupCount = '4';
+    state.configuration.qualifierCount = '16';
+    state.configuration.luckyLosers = true;
+  `, context);
+
+  await vm.runInContext('performTournamentDraw()', context);
+  const save = requests.find((request) =>
+    request.url === '/api/tournaments/t/draw' && request.options.method === 'PUT');
+  assert.ok(save);
+  const draw = JSON.parse(save.options.body);
+  assert.deepEqual(draw.groups.flat().sort(), entryIds.slice().sort());
+  assert.deepEqual(draw.groups.map((group) => group.length), [6, 6, 6, 6]);
+  assert.equal(draw.brackets.endRound.length, 16);
+  assert.equal(draw.brackets.luckyLosers.length, 8);
+
+  const firstRoundPairs = (slots) => Array.from(
+    { length: slots.length / 2 },
+    (_, index) => slots.slice(index * 2, index * 2 + 2)
+  );
+  const endRoundPairs = firstRoundPairs(draw.brackets.endRound);
+  endRoundPairs.forEach((pair) => {
+    assert.ok(pair.every((seed) => seed && seed.type === 'group'));
+    assert.notEqual(pair[0].groupIndex, pair[1].groupIndex);
+    assert.deepEqual(pair.map((seed) => seed.place).sort(), [1, 4].includes(pair[0].place)
+      ? [1, 4].sort((a, b) => a - b)
+      : [2, 3]);
+  });
+  for (let groupIndex = 0; groupIndex < 4; groupIndex += 1) {
+    const firstSeedMatch = draw.brackets.endRound.findIndex((seed) =>
+      seed?.type === 'group' && seed.groupIndex === groupIndex && seed.place === 1) / 2;
+    const secondSeedMatch = draw.brackets.endRound.findIndex((seed) =>
+      seed?.type === 'group' && seed.groupIndex === groupIndex && seed.place === 2) / 2;
+    assert.notEqual(firstSeedMatch < endRoundPairs.length / 2, secondSeedMatch < endRoundPairs.length / 2);
+  }
+  assert.deepEqual(
+    draw.brackets.luckyLosers.filter(Boolean).map(({ groupIndex, place }) => [groupIndex, place])
+      .sort((left, right) => left[0] - right[0] || left[1] - right[1]),
+    Array.from({ length: 4 }, (_, groupIndex) => [[groupIndex, 5], [groupIndex, 6]]).flat()
+  );
+
+  const html = vm.runInContext(
+    `renderDrawStep({ id: 7, title: 'Auslosung', description: '' })`,
+    context
+  );
+  assert.match(html, /1\. Gruppe [A-D]/);
+  assert.match(html, /4\. Gruppe [A-D]/);
+  assert.match(html, /5\. Gruppe [A-D]/);
+  const schedule = JSON.parse(vm.runInContext(`
+    JSON.stringify(buildMatchSchedule()
+      .filter((match) => match.bracketRound === 0 && match.rankStart === 1)
+      .map((match) => [match.phase, match.first, match.second]))
+  `, context));
+  const schedulePairs = (phase) => schedule
+    .filter(([matchPhase]) => matchPhase === phase)
+    .map(([, first, second]) => [first, second].sort().join('|'))
+    .sort();
+  const savedPairs = (slots) => firstRoundPairs(slots)
+    .map((pair) => pair.map((seed) => vm.runInContext(`drawSeedLabel(${JSON.stringify(seed)})`, context))
+      .sort().join('|'))
+    .sort();
+  assert.deepEqual(schedulePairs('Endrunde'), savedPairs(draw.brackets.endRound));
+  assert.deepEqual(schedulePairs('Lucky Losers'), savedPairs(draw.brackets.luckyLosers));
+
+  responses['/api/tournaments/t/draw'] = draw;
+  vm.runInContext('resetDraw()', context);
+  await vm.runInContext('openTournament("t")', context);
+  assert.equal(vm.runInContext('hasDraw()', context), true);
+  assert.deepEqual(
+    JSON.parse(vm.runInContext('JSON.stringify(state.drawGroups.map((group) => group.map((entry) => entry.id)))', context)),
+    draw.groups
+  );
+  assert.equal(vm.runInContext('state.configuration.groupCount', context), '4');
+  assert.ok(requests.some((request) => request.url === '/api/tournaments/t/draw' && !request.options.method));
+});
+
+test('group winners and runners-up cannot meet before the final in supported bracket shapes', async () => {
+  const { context } = await createApp();
+  for (const [qualifiers, groupCount, groupSize] of [
+    [8, 2, 4], [8, 3, 5], [16, 3, 6], [16, 4, 4], [16, 5, 4], [32, 4, 8]
+  ]) {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const slots = JSON.parse(vm.runInContext(`
+        state.configuration.placementPhaseEnabled = true;
+        JSON.stringify(createGroupBracketSlots(
+          Array.from({ length: ${groupCount} }, () => Array(${groupSize}).fill({})),
+          ${qualifiers},
+          true
+        ).endRound)
+      `, context));
+      const matchCount = slots.length / 2;
+      for (let groupIndex = 0; groupIndex < groupCount; groupIndex += 1) {
+        const winnerMatch = slots.findIndex((seed) =>
+          seed?.type === 'group' && seed.groupIndex === groupIndex && seed.place === 1) / 2;
+        const runnerUpMatch = slots.findIndex((seed) =>
+          seed?.type === 'group' && seed.groupIndex === groupIndex && seed.place === 2) / 2;
+        if (winnerMatch >= 0 && runnerUpMatch >= 0) {
+          assert.notEqual(winnerMatch < matchCount / 2, runnerUpMatch < matchCount / 2,
+            `group ${groupIndex} meets before the final for ${qualifiers} qualifiers`);
+        }
+      }
+    }
+  }
+});
+
+test('direct knockout draw persists and restores its first-round pairings', async () => {
+  const { context, responses, requests } = await createApp();
+  const entryIds = Array.from({ length: 5 }, (_, index) =>
+    `10000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`);
+  vm.runInContext(`
+    state.currentTournamentId = 't';
+    state.tournaments = [{ id: 't', name: 'Testturnier', status: 'open' }];
+    state.entries = ${JSON.stringify(entryIds)}.map((id) => ({ id, tournament_id: 't' }));
+    resetPhaseDefaults(5);
+    state.configuration.groupPhaseEnabled = false;
+    state.configuration.luckyLosers = false;
+  `, context);
+
+  await vm.runInContext('performTournamentDraw()', context);
+  const payload = JSON.parse(requests.find((request) =>
+    request.url === '/api/tournaments/t/draw' && request.options.method === 'PUT').options.body);
+  assert.equal(payload.groups, null);
+  assert.equal(payload.directBracketEntries.length, 8);
+  assert.equal(payload.directBracketEntries.filter(Boolean).length, entryIds.length);
+  assert.equal(payload.directBracketEntries.filter((entry) => entry === null).length, 3);
+
+  responses['/api/tournaments/t/draw'] = payload;
+  vm.runInContext('resetDraw()', context);
+  await vm.runInContext('openTournament("t")', context);
+  const restored = JSON.parse(vm.runInContext(
+    'JSON.stringify(state.drawBracketEntries.map((entry) => entry?.id ?? null))',
+    context
+  ));
+  assert.deepEqual(restored, payload.directBracketEntries);
 });
 
 test('schedule counts agree with badges across phase settings and byes', async () => {

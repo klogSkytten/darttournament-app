@@ -130,6 +130,47 @@ test('renaming a reused team preserves its identity and rolls back name conflict
       tournamentId: secondTournament.id,
       personId: people[1].id,
     });
+    entries = await (await fetch(`${base}/api/tournament-entries`)).json();
+    const secondTournamentEntries = entries.data
+      .filter((entry) => entry.tournament_id === secondTournament.id)
+      .map((entry) => entry.id);
+    const draw = {
+      version: 1,
+      configuration: {
+        groupPhaseEnabled: true,
+        groupCount: 1,
+        gamesPerPair: 1,
+        qualifierCount: 4,
+        placementPhaseEnabled: true,
+        placementGames: true,
+        luckyLosers: false,
+      },
+      groups: [secondTournamentEntries],
+      directBracketEntries: null,
+      brackets: {
+        endRound: [
+          { type: 'group', groupIndex: 0, place: 1 },
+          { type: 'group', groupIndex: 0, place: 2 },
+        ],
+        luckyLosers: null,
+      },
+    };
+    const savedDraw = await put(`/api/tournaments/${secondTournament.id}/draw`, draw);
+    assert.deepEqual(savedDraw.data, draw);
+    const loadedDraw = await (await fetch(`${base}/api/tournaments/${secondTournament.id}/draw`)).json();
+    assert.deepEqual(loadedDraw.data, draw);
+    await put(`/api/tournaments/${secondTournament.id}/draw`, {
+      ...draw,
+      groups: [[secondTournamentEntries[0], secondTournamentEntries[0]]],
+    }, 400);
+    const unchangedDraw = await (await fetch(`${base}/api/tournaments/${secondTournament.id}/draw`)).json();
+    assert.deepEqual(unchangedDraw.data, draw);
+    const resetDrawResponse = await fetch(`${base}/api/tournaments/${secondTournament.id}/draw`, {
+      method: 'DELETE',
+    });
+    assert.equal(resetDrawResponse.status, 200);
+    assert.equal((await resetDrawResponse.json()).data, null);
+    await put(`/api/tournaments/${secondTournament.id}/draw`, draw);
     await patch(`/api/tournaments/${secondTournament.id}/participants/${people[0].id}/fee`, { paid: true });
     await patch(`/api/tournaments/${secondTournament.id}/participation-fee`, { enabled: true });
     let tournaments = await (await fetch(`${base}/api/tournaments`)).json();
@@ -165,6 +206,8 @@ test('renaming a reused team preserves its identity and rolls back name conflict
         .map((entry) => [entry.tournament_id, entry.team_name]).sort(),
       [[firstTournament.id, 'Renamed team'], [secondTournament.id, 'Renamed team']].sort(),
     );
+    const invalidatedDraw = await (await fetch(`${base}/api/tournaments/${secondTournament.id}/draw`)).json();
+    assert.equal(invalidatedDraw.data, null);
     assert.deepEqual(
       entries.data.find((entry) => entry.tournament_id === secondTournament.id).members
         .map((member) => [member.person_id, member.participation_fee_paid]).sort(),

@@ -43,6 +43,10 @@ export async function bootstrapDatabase(pool: Pool = database): Promise<void> {
         CHECK (dartboard_count >= 0);
 
       ALTER TABLE tournaments
+        ADD COLUMN IF NOT EXISTS draw JSONB
+        CHECK (draw IS NULL OR jsonb_typeof(draw) = 'object');
+
+      ALTER TABLE tournaments
         ADD COLUMN IF NOT EXISTS participation_fee_enabled BOOLEAN NOT NULL DEFAULT true;
 
       ALTER TABLE tournaments
@@ -89,6 +93,30 @@ export async function bootstrapDatabase(pool: Pool = database): Promise<void> {
       CREATE UNIQUE INDEX IF NOT EXISTS tournament_entries_team_unique
         ON tournament_entries (tournament_id, team_id)
         WHERE team_id IS NOT NULL;
+
+      CREATE OR REPLACE FUNCTION clear_tournament_draw_on_entry_change()
+      RETURNS TRIGGER
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        IF TG_OP = 'DELETE' THEN
+          UPDATE tournaments SET draw = NULL, updated_at = now() WHERE id = OLD.tournament_id;
+          RETURN OLD;
+        END IF;
+
+        UPDATE tournaments SET draw = NULL, updated_at = now() WHERE id = NEW.tournament_id;
+        IF TG_OP = 'UPDATE' AND OLD.tournament_id <> NEW.tournament_id THEN
+          UPDATE tournaments SET draw = NULL, updated_at = now() WHERE id = OLD.tournament_id;
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+
+      DROP TRIGGER IF EXISTS tournament_entries_clear_draw ON tournament_entries;
+      CREATE TRIGGER tournament_entries_clear_draw
+        AFTER INSERT OR UPDATE OR DELETE ON tournament_entries
+        FOR EACH ROW
+        EXECUTE FUNCTION clear_tournament_draw_on_entry_change();
 
       ALTER TABLE tournaments
         ADD COLUMN IF NOT EXISTS winner_tournament_entry_id UUID

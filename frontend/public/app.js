@@ -58,6 +58,7 @@ const state = {
   databaseResetEnabled: false,
   drawGroups: null,
   drawBracketEntries: null,
+  drawBracketSlots: null,
   clientConnections: [],
   configuration: {}
 };
@@ -1404,6 +1405,299 @@ function hasDraw() {
 function resetDraw() {
   state.drawGroups = null;
   state.drawBracketEntries = null;
+  state.drawBracketSlots = null;
+}
+
+function drawSeedLabel(seed) {
+  if (!seed) return 'Freilos';
+  if (seed.type === 'group') return `${seed.place}. Gruppe ${groupLabel(seed.groupIndex)}`;
+  if (seed.type === 'additional') return `Zusatz-Qualifikant ${seed.index}`;
+  return `Lucky ${seed.index}`;
+}
+
+function seedRank(seed, highestGroupPlace) {
+  if (seed.type === 'group') return seed.place;
+  if (seed.type === 'additional') return highestGroupPlace + seed.index;
+  return highestGroupPlace + 100 + seed.index;
+}
+
+function createSeededBracketSlots(seeds) {
+  if (!seeds.length) return [];
+  const groupSeeds = seeds.filter((seed) => seed.type === 'group');
+  const highestGroupPlace = Math.max(0, ...groupSeeds.map((seed) => seed.place));
+  const groupOrder = [...new Set(groupSeeds.map((seed) => seed.groupIndex))];
+  for (let index = groupOrder.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [groupOrder[index], groupOrder[swapIndex]] = [groupOrder[swapIndex], groupOrder[index]];
+  }
+  const groupPriority = new Map(groupOrder.map((groupIndex, index) => [groupIndex, index]));
+  const rankedSeeds = seeds.slice().sort((left, right) =>
+    seedRank(left, highestGroupPlace) - seedRank(right, highestGroupPlace)
+      || (groupPriority.get(left.groupIndex) ?? Number.MAX_SAFE_INTEGER)
+        - (groupPriority.get(right.groupIndex) ?? Number.MAX_SAFE_INTEGER)
+      || (left.index || 0) - (right.index || 0)
+  );
+  const bracketSize = nextBracketSize(seeds.length);
+  const byeCount = bracketSize - seeds.length;
+  const pairs = rankedSeeds.slice(0, byeCount).map((seed) => [seed, null]);
+  const remaining = rankedSeeds.slice(byeCount);
+  while (remaining.length) {
+    const first = remaining.shift();
+    let opponentIndex = remaining.length - 1;
+    if (first.type === 'group') {
+      let differentGroup = -1;
+      for (let index = remaining.length - 1; index >= 0; index -= 1) {
+        if (remaining[index].type !== 'group' || remaining[index].groupIndex !== first.groupIndex) {
+          differentGroup = index;
+          break;
+        }
+      }
+      if (differentGroup >= 0) opponentIndex = differentGroup;
+    }
+    pairs.push([first, remaining.splice(opponentIndex, 1)[0]]);
+  }
+
+  const matchByGroupPlace = new Map();
+  pairs.forEach((pair, matchIndex) => {
+    pair.forEach((seed) => {
+      if (seed?.type === 'group' && seed.place <= 2) {
+        const key = `${seed.groupIndex}:${seed.place}`;
+        matchByGroupPlace.set(key, matchIndex);
+      }
+    });
+  });
+  const graph = pairs.map(() => new Set());
+  groupSeeds.forEach((seed) => {
+    if (seed.place !== 1) return;
+    const firstMatch = matchByGroupPlace.get(`${seed.groupIndex}:1`);
+    const secondMatch = matchByGroupPlace.get(`${seed.groupIndex}:2`);
+    if (firstMatch !== undefined && secondMatch !== undefined && firstMatch !== secondMatch) {
+      graph[firstMatch].add(secondMatch);
+      graph[secondMatch].add(firstMatch);
+    }
+  });
+  const colors = Array(pairs.length).fill(-1);
+  const components = [];
+  let bipartite = true;
+  for (let start = 0; start < pairs.length; start += 1) {
+    if (colors[start] !== -1) continue;
+    const component = [];
+    const queue = [start];
+    colors[start] = 0;
+    while (queue.length) {
+      const current = queue.shift();
+      component.push(current);
+      graph[current].forEach((neighbor) => {
+        if (colors[neighbor] === -1) {
+          colors[neighbor] = 1 - colors[current];
+          queue.push(neighbor);
+        } else if (colors[neighbor] === colors[current]) {
+          bipartite = false;
+        }
+      });
+    }
+    components.push(component);
+  }
+  if (bipartite) {
+    const halfSize = pairs.length / 2;
+    let firstHalfCount = 0;
+    components.forEach((component) => {
+      const colorZeroCount = component.filter((index) => colors[index] === 0).length;
+      const colorOneCount = component.length - colorZeroCount;
+      const keepColors = Math.abs(firstHalfCount + colorZeroCount - halfSize)
+        <= Math.abs(firstHalfCount + colorOneCount - halfSize);
+      if (!keepColors) component.forEach((index) => { colors[index] = 1 - colors[index]; });
+      firstHalfCount += keepColors ? colorZeroCount : colorOneCount;
+    });
+  } else {
+    pairs.forEach((_pair, index) => { colors[index] = index % 2; });
+  }
+  const orderedPairs = [
+    ...pairs.filter((_pair, index) => colors[index] === 0),
+    ...pairs.filter((_pair, index) => colors[index] === 1)
+  ];
+  return orderedPairs.flat();
+}
+
+function createGroupBracketSlots(groups, qualifierCount, luckyLosers) {
+  if (!groups.length || qualifierCount < 2) return { endRound: null, luckyLosers: null };
+  const perGroup = Math.min(
+    Math.floor(qualifierCount / groups.length),
+    ...groups.map((group) => group.length)
+  );
+  const finalists = groups.flatMap((group, groupIndex) =>
+    Array.from({ length: perGroup }, (_item, placeIndex) => ({
+      type: 'group',
+      groupIndex,
+      place: placeIndex + 1
+    }))
+  );
+  const additionalCount = qualifierCount - finalists.length;
+  finalists.push(...Array.from({ length: additionalCount }, (_item, index) => ({
+    type: 'additional',
+    index: index + 1
+  })));
+  const luckyCount = groups.reduce((total, group) => total + group.length, 0) - qualifierCount;
+  let luckySeeds = [];
+  if (luckyLosers && luckyCount > 1) {
+    if (additionalCount === 0) {
+      luckySeeds = groups.flatMap((group, groupIndex) =>
+        Array.from({ length: Math.max(0, group.length - perGroup) }, (_item, index) => ({
+          type: 'group',
+          groupIndex,
+          place: perGroup + index + 1
+        }))
+      );
+    } else {
+      luckySeeds = Array.from({ length: luckyCount }, (_item, index) => ({
+        type: 'lucky',
+        index: index + 1
+      }));
+    }
+  }
+  return {
+    endRound: state.configuration.placementPhaseEnabled === true
+      ? createSeededBracketSlots(finalists)
+      : null,
+    luckyLosers: luckySeeds.length ? createSeededBracketSlots(luckySeeds) : null
+  };
+}
+
+function tournamentDrawPayload() {
+  return {
+    version: 1,
+    configuration: {
+      groupPhaseEnabled: state.configuration.groupPhaseEnabled !== false,
+      groupCount: currentGroupCount(),
+      gamesPerPair: Number(state.configuration.gamesPerPair) || 1,
+      qualifierCount: Math.max(4, Number(state.configuration.qualifierCount) || 4),
+      placementPhaseEnabled: state.configuration.placementPhaseEnabled === true,
+      placementGames: state.configuration.placementGames === true,
+      luckyLosers: state.configuration.luckyLosers === true
+    },
+    groups: state.drawGroups?.map((group) => group.map((entry) => entry.id)) ?? null,
+    directBracketEntries: state.drawBracketEntries?.map((entry) => entry?.id ?? null) ?? null,
+    brackets: state.drawBracketSlots || { endRound: null, luckyLosers: null }
+  };
+}
+
+function restoreTournamentDraw(draw) {
+  if (!draw || draw.version !== 1 || !draw.configuration
+    || !draw.brackets || typeof draw.brackets !== 'object') {
+    throw new Error('Die gespeicherte Auslosung hat ein ungültiges Format.');
+  }
+  const entriesById = new Map(currentTournamentEntries().map((entry) => [entry.id, entry]));
+  const configuration = draw.configuration;
+  let groups = null;
+  let directBracketEntries = null;
+  if (configuration.groupPhaseEnabled) {
+    if (!Array.isArray(draw.groups) || draw.groups.length !== configuration.groupCount) {
+      throw new Error('Die gespeicherten Gruppen sind ungültig.');
+    }
+    groups = draw.groups.map((group) => {
+      if (!Array.isArray(group)) throw new Error('Eine gespeicherte Gruppe ist ungültig.');
+      return group.map((entryId) => {
+        const entry = entriesById.get(entryId);
+        if (!entry) throw new Error('Die gespeicherte Auslosung passt nicht mehr zu den Turnierteilnehmern.');
+        return entry;
+      });
+    });
+    const assignedIds = groups.flatMap((group) => group.map((entry) => entry.id));
+    if (assignedIds.length !== entriesById.size || new Set(assignedIds).size !== entriesById.size) {
+      throw new Error('Die gespeicherte Gruppenzuteilung passt nicht mehr zu den Turnierteilnehmern.');
+    }
+    const qualifierCount = Math.min(entriesById.size, Number(configuration.qualifierCount));
+    const luckyCount = entriesById.size - qualifierCount;
+    if (configuration.placementPhaseEnabled
+      && (!Array.isArray(draw.brackets.endRound)
+        || draw.brackets.endRound.length !== nextBracketSize(qualifierCount))) {
+      throw new Error('Die gespeicherte Endrunden-Auslosung ist ungültig.');
+    }
+    if (!configuration.placementPhaseEnabled && draw.brackets.endRound !== null) {
+      throw new Error('Die gespeicherte Endrunden-Auslosung passt nicht zu den Phaseneinstellungen.');
+    }
+    if (configuration.luckyLosers && luckyCount > 1
+      && (!Array.isArray(draw.brackets.luckyLosers)
+        || draw.brackets.luckyLosers.length !== nextBracketSize(luckyCount))) {
+      throw new Error('Die gespeicherte Lucky-Losers-Auslosung ist ungültig.');
+    }
+    if ((!configuration.luckyLosers || luckyCount <= 1) && draw.brackets.luckyLosers !== null) {
+      throw new Error('Die gespeicherte Lucky-Losers-Auslosung passt nicht zu den Phaseneinstellungen.');
+    }
+  } else {
+    if (!Array.isArray(draw.directBracketEntries)
+      || draw.directBracketEntries.length !== nextBracketSize(entriesById.size)
+      || draw.brackets.endRound !== null
+      || draw.brackets.luckyLosers !== null) {
+      throw new Error('Die gespeicherte Endrunden-Auslosung ist ungültig.');
+    }
+    directBracketEntries = draw.directBracketEntries.map((entryId) => {
+      if (entryId === null) return null;
+      const entry = entriesById.get(entryId);
+      if (!entry) throw new Error('Die gespeicherte Auslosung passt nicht mehr zu den Turnierteilnehmern.');
+      return entry;
+    });
+    if (directBracketEntries.filter(Boolean).length !== entriesById.size
+      || new Set(directBracketEntries.filter(Boolean).map((entry) => entry.id)).size !== entriesById.size) {
+      throw new Error('Die gespeicherte Endrunden-Auslosung ist ungültig.');
+    }
+  }
+  state.configuration = {
+    ...state.configuration,
+    groupPhaseEnabled: configuration.groupPhaseEnabled,
+    groupCount: String(configuration.groupCount),
+    gamesPerPair: String(configuration.gamesPerPair),
+    qualifierCount: String(configuration.qualifierCount),
+    placementPhaseEnabled: configuration.placementPhaseEnabled,
+    placementGames: configuration.placementGames,
+    luckyLosers: configuration.luckyLosers
+  };
+  state.drawGroups = groups;
+  state.drawBracketEntries = directBracketEntries;
+  state.drawBracketSlots = configuration.groupPhaseEnabled ? draw.brackets : null;
+  return true;
+}
+
+async function performTournamentDraw() {
+  if (!state.currentTournamentId) throw new Error('Bitte zuerst ein Turnier auswählen.');
+  const entries = currentTournamentEntries();
+  if (!entries.length) throw new Error('Für die Auslosung werden Teilnehmer benötigt.');
+  const shuffledEntries = entries.slice();
+  for (let index = shuffledEntries.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffledEntries[index], shuffledEntries[swapIndex]] = [shuffledEntries[swapIndex], shuffledEntries[index]];
+  }
+  if (state.configuration.groupPhaseEnabled === false) {
+    state.drawBracketEntries = createDirectBracketEntries(shuffledEntries);
+    state.drawGroups = null;
+    state.drawBracketSlots = null;
+  } else {
+    const groupCount = currentGroupCount();
+    state.drawGroups = Array.from({ length: groupCount }, () => []);
+    const groupBaseSize = Math.floor(shuffledEntries.length / groupCount);
+    const extraGroupCount = shuffledEntries.length % groupCount;
+    let entryIndex = 0;
+    state.drawGroups.forEach((group, index) => {
+      const groupSize = groupBaseSize + (index < extraGroupCount ? 1 : 0);
+      group.push(...shuffledEntries.slice(entryIndex, entryIndex + groupSize));
+      entryIndex += groupSize;
+    });
+    state.drawBracketEntries = null;
+    state.drawBracketSlots = createGroupBracketSlots(
+      state.drawGroups,
+      Math.min(entries.length, Number(state.configuration.qualifierCount)),
+      state.configuration.luckyLosers === true
+    );
+  }
+  try {
+    await apiRequest(`/api/tournaments/${encodeURIComponent(state.currentTournamentId)}/draw`, {
+      method: 'PUT',
+      body: JSON.stringify(tournamentDrawPayload())
+    });
+  } catch (error) {
+    resetDraw();
+    throw error;
+  }
 }
 
 function nextBracketSize(entryCount) {
@@ -1480,10 +1774,14 @@ function renderDrawBracket(qualifierCount, directEntries = null, labelPrefix = '
       const matchIndex = startIndex + index;
       const [firstEntry, secondEntry] = matches[matchIndex];
       const firstLabel = firstEntry
-        ? escapeHtml(directEntries ? drawEntryLabel(firstEntry) : firstEntry)
+        ? escapeHtml(directEntries
+          ? typeof firstEntry === 'string' ? firstEntry : drawEntryLabel(firstEntry)
+          : firstEntry)
         : 'Freilos';
       const secondLabel = secondEntry
-        ? escapeHtml(directEntries ? drawEntryLabel(secondEntry) : secondEntry)
+        ? escapeHtml(directEntries
+          ? typeof secondEntry === 'string' ? secondEntry : drawEntryLabel(secondEntry)
+          : secondEntry)
         : 'Freilos';
       const firstClass = firstEntry ? '' : ' draw-player-badge-bye';
       const secondClass = secondEntry ? '' : ' draw-player-badge-bye';
@@ -1600,7 +1898,7 @@ function renderDrawStep(section) {
   }).join('');
   const placementPhaseEnabled = state.configuration.placementPhaseEnabled !== false;
   const qualifierCount = groupPhaseEnabled
-    ? Number(state.configuration.qualifierCount) || entries.length
+    ? Math.min(entries.length, Number(state.configuration.qualifierCount) || entries.length)
     : entries.length;
   const roundName = ({
     2: 'Halbfinale',
@@ -1608,15 +1906,24 @@ function renderDrawStep(section) {
     8: 'Viertelfinale',
     16: 'Achtelfinale'
   })[qualifierCount] || `Erste Runde · ${qualifierCount} Teilnehmer`;
+  const drawn = hasDraw();
+  const endRoundSlots = drawn && groupPhaseEnabled
+    ? state.drawBracketSlots?.endRound?.map((seed) => seed ? drawSeedLabel(seed) : null)
+    : null;
+  const luckyLoserSlots = drawn
+    ? state.drawBracketSlots?.luckyLosers?.map((seed) => seed ? drawSeedLabel(seed) : null)
+    : null;
   const bracket = placementPhaseEnabled
-    ? renderDrawBracket(qualifierCount, groupPhaseEnabled ? null : state.drawBracketEntries)
+    ? renderDrawBracket(
+      qualifierCount,
+      groupPhaseEnabled ? endRoundSlots : state.drawBracketEntries
+    )
     : '<p class="subtle-copy">Die Endrunde ist deaktiviert.</p>';
   const luckyLoserCount = entries.length - qualifierCount;
   const showLuckyLosers = groupPhaseEnabled
     && placementPhaseEnabled
     && Boolean(state.configuration.luckyLosers ?? true)
     && luckyLoserCount > 1;
-  const drawn = hasDraw();
   return `${stepHeading(section)}
     <div class="draw-workspace">
       <article class="surface-inset draw-entries-panel">
@@ -1642,7 +1949,7 @@ function renderDrawStep(section) {
     ? `<div class="draw-bracket-pair">
         <section class="draw-section">
           <h2>Lucky Losers</h2>
-          ${renderDrawBracket(luckyLoserCount, null, 'Lucky')}
+          ${renderDrawBracket(luckyLoserCount, luckyLoserSlots, 'Lucky')}
         </section>
         <div class="draw-bracket-divider" aria-hidden="true"></div>
         <section class="draw-section">
@@ -1875,33 +2182,57 @@ function buildMatchSchedule() {
     : participantCount;
   let finalists;
   let luckySeeds;
+  let finalSlots;
+  let luckySlots;
   if (groupEnabled) {
-    const perGroup = groups.length
-      ? Math.min(Math.floor(qualifierCount / groups.length), ...groups.map((group) => group.size))
-      : 0;
-    finalists = Array.from({ length: perGroup }, (_, index) =>
-      groups.map((group) => `${index + 1}. Gruppe ${group.label}`)
-    ).flat();
-    const extraQualifiers = qualifierCount - finalists.length;
-    finalists.push(...Array.from({ length: extraQualifiers }, (_, index) => `Zusatz-Qualifikant ${index + 1}`));
-    luckySeeds = extraQualifiers
-      ? Array.from({ length: participantCount - qualifierCount }, (_, index) => `Lucky ${index + 1}`)
-      : groups.flatMap((group) => Array.from(
-        { length: group.size - perGroup },
-        (_, index) => `${perGroup + index + 1}. Gruppe ${group.label}`
-      ));
+    finalSlots = state.drawBracketSlots?.endRound || null;
+    luckySlots = state.drawBracketSlots?.luckyLosers || null;
+    if (finalSlots) {
+      finalists = finalSlots.filter(Boolean).map(drawSeedLabel);
+    } else {
+      const perGroup = groups.length
+        ? Math.min(Math.floor(qualifierCount / groups.length), ...groups.map((group) => group.size))
+        : 0;
+      finalists = Array.from({ length: perGroup }, (_, index) =>
+        groups.map((group) => `${index + 1}. Gruppe ${group.label}`)
+      ).flat();
+      const extraQualifiers = qualifierCount - finalists.length;
+      finalists.push(...Array.from({ length: extraQualifiers }, (_, index) => `Zusatz-Qualifikant ${index + 1}`));
+    }
+    if (luckySlots) {
+      luckySeeds = luckySlots.filter(Boolean).map(drawSeedLabel);
+    } else {
+      const perGroup = groups.length
+        ? Math.min(Math.floor(qualifierCount / groups.length), ...groups.map((group) => group.size))
+        : 0;
+      const additionalQualifiers = qualifierCount - perGroup * groups.length;
+      luckySeeds = Array.from({ length: Math.max(0, participantCount - qualifierCount) }, (_, index) =>
+        `Lucky ${index + 1}`
+      );
+      if (additionalQualifiers === 0) {
+        luckySeeds = groups.flatMap((group) => Array.from(
+          { length: group.size - perGroup },
+          (_, index) => `${perGroup + index + 1}. Gruppe ${group.label}`
+        ));
+      }
+    }
   } else {
     finalists = Array.from({ length: participantCount }, (_, index) => `Teilnehmer ${index + 1}`);
     luckySeeds = [];
+    finalSlots = null;
+    luckySlots = null;
   }
 
   if (groupEnabled && state.configuration.luckyLosers === true) {
-    addPlacementBracket(bracketMatches, 'Lucky Losers', luckySeeds, true);
+    const slots = luckySlots?.map((seed) => seed ? drawSeedLabel(seed) : null) || null;
+    addPlacementBracket(bracketMatches, 'Lucky Losers', luckySeeds, true, slots);
   }
   if (placementEnabled) {
-    const slots = !groupEnabled && state.drawBracketEntries
-      ? state.drawBracketEntries.map((entry) => entry ? drawEntryLabel(entry) : null)
-      : null;
+    const slots = groupEnabled
+      ? finalSlots?.map((seed) => seed ? drawSeedLabel(seed) : null) || null
+      : state.drawBracketEntries
+        ? state.drawBracketEntries.map((entry) => entry ? drawEntryLabel(entry) : null)
+        : null;
     addPlacementBracket(bracketMatches, 'Endrunde', finalists, state.configuration.placementGames === true, slots);
   }
   matches.push(...orderBracketMatches(bracketMatches));
@@ -2363,7 +2694,7 @@ function bindStepActions() {
     if (['groupCount', 'gamesPerPair', 'qualifierCount', 'boardCount'].includes(key)) {
       control.addEventListener('input', updateTournamentMetrics);
     }
-    control.addEventListener('change', () => {
+    control.addEventListener('change', async () => {
       const configKey = control.type === 'radio' ? control.name : control.id;
       if (!configKey || (control.type === 'radio' && !control.checked)) return;
       const previousGroupPhaseEnabled = state.configuration.groupPhaseEnabled !== false;
@@ -2379,6 +2710,27 @@ function bindStepActions() {
         showNotice('Bitte eine gültige Anzahl an Spielen ab 1 eingeben.', 'warning');
         return;
       }
+      const drawConfigurationKeys = [
+        'groupCount', 'gamesPerPair', 'qualifierCount', 'groupPhaseEnabled',
+        'placementPhaseEnabled', 'placementGames', 'luckyLosers'
+      ];
+      const phaseChanged = configKey === 'groupPhaseEnabled'
+        && control.checked !== previousGroupPhaseEnabled;
+      if (hasDraw() && (drawConfigurationKeys.includes(configKey))
+        && (configKey !== 'groupPhaseEnabled' || phaseChanged)) {
+        try {
+          await apiRequest(`/api/tournaments/${encodeURIComponent(state.currentTournamentId)}/draw`, {
+            method: 'DELETE'
+          });
+        } catch (error) {
+          if (control.type === 'checkbox') control.checked = state.configuration[configKey] === true;
+          else control.value = String(state.configuration[configKey] ?? '');
+          showNotice(error.message, 'error');
+          return;
+        }
+        resetDraw();
+        showNotice('Die Auslosung wurde wegen geänderter Phaseneinstellungen zurückgesetzt.', 'warning');
+      }
       if (configKey === 'qualifierCount') {
         const previousValue = Number(state.configuration.qualifierCount);
         const nextValue = normalizeQualifierCount(
@@ -2392,13 +2744,10 @@ function bindStepActions() {
         state.configuration[configKey] = control.type === 'checkbox' ? control.checked : control.value;
       }
       if (configKey === 'groupCount') {
-        resetDraw();
         updateTournamentMetrics();
       }
       if (configKey === 'groupPhaseEnabled' && previousGroupPhaseEnabled !== state.configuration.groupPhaseEnabled) {
-        const hadDraw = hasDraw();
-        resetDraw();
-        if (hadDraw) showNotice('Die Auslosung wurde zurückgesetzt, weil sich die Gruppenphase geändert hat.', 'warning');
+        updateTournamentMetrics();
       }
       if (configKey === 'groupPhaseEnabled' && !state.configuration.groupPhaseEnabled) {
         state.configuration.luckyLosers = false;
@@ -2437,41 +2786,29 @@ function bindStepActions() {
     });
   });
 
-  document.getElementById('drawButton')?.addEventListener('click', () => {
+  document.getElementById('drawButton')?.addEventListener('click', async () => {
     if (hasDraw()) {
+      try {
+        await apiRequest(`/api/tournaments/${encodeURIComponent(state.currentTournamentId)}/draw`, {
+          method: 'DELETE'
+        });
+      } catch (error) {
+        showNotice(error.message, 'error');
+        return;
+      }
       resetDraw();
       renderStep();
       showNotice('Die Auslosung wurde zurückgesetzt.', 'success');
       return;
     }
-    const entries = currentTournamentEntries();
-    if (!entries.length) {
-      showNotice('Für die Auslosung werden Teilnehmer benötigt.', 'warning');
-      return;
+    try {
+      await performTournamentDraw();
+      renderStep();
+      showNotice('Die Auslosung wurde erstellt und gespeichert.', 'success');
+    } catch (error) {
+      renderStep();
+      showNotice(error.message, 'error');
     }
-    const shuffledEntries = [...entries];
-    for (let index = shuffledEntries.length - 1; index > 0; index -= 1) {
-      const swapIndex = Math.floor(Math.random() * (index + 1));
-      [shuffledEntries[index], shuffledEntries[swapIndex]] = [shuffledEntries[swapIndex], shuffledEntries[index]];
-    }
-    if (state.configuration.groupPhaseEnabled === false) {
-      state.drawBracketEntries = createDirectBracketEntries(shuffledEntries);
-      state.drawGroups = null;
-    } else {
-      const groupCount = currentGroupCount();
-      state.drawGroups = Array.from({ length: groupCount }, () => []);
-      const groupBaseSize = Math.floor(shuffledEntries.length / groupCount);
-      const extraGroupCount = shuffledEntries.length % groupCount;
-      let entryIndex = 0;
-      state.drawGroups.forEach((group, index) => {
-        const groupSize = groupBaseSize + (index < extraGroupCount ? 1 : 0);
-        group.push(...shuffledEntries.slice(entryIndex, entryIndex + groupSize));
-        entryIndex += groupSize;
-      });
-      state.drawBracketEntries = null;
-    }
-    renderStep();
-    showNotice('Die Teilnehmer wurden ausgelost.', 'success');
   });
 
   document.getElementById('startTournamentButton')?.addEventListener('click', () => {
@@ -2531,8 +2868,18 @@ async function loadData() {
     state.teams = teams.data || [];
     state.entries = entries.data || [];
     const entryCountChanged = previousEntryCount !== currentTournamentEntries().length;
+    const drawnEntryIds = [
+      ...(state.drawGroups || []).flat(),
+      ...(state.drawBracketEntries || []).filter(Boolean)
+    ].map((entry) => entry.id);
+    const currentEntryIds = new Set(currentTournamentEntries().map((entry) => entry.id));
+    const drawParticipantsChanged = hasDraw()
+      && (drawnEntryIds.length !== currentEntryIds.size
+        || drawnEntryIds.some((entryId) => !currentEntryIds.has(entryId)));
     if (entryCountChanged) {
       resetPhaseDefaults(currentTournamentEntries().length);
+    }
+    if (entryCountChanged || drawParticipantsChanged) {
       resetDraw();
     }
     renderTournaments();
@@ -2575,7 +2922,7 @@ async function loadTestTools() {
   }
 }
 
-function openTournament(id) {
+async function openTournament(id) {
   const tournament = state.tournaments.find((item) => item.id === id);
   if (!tournament) return;
   const tournamentChanged = state.currentTournamentId !== tournament.id;
@@ -2590,6 +2937,15 @@ function openTournament(id) {
   state.participationFeeEnabled = tournament.participation_fee_enabled === true;
   state.currentStep = ['running', 'finished'].includes(state.currentTournamentStatus) ? 10 : 3;
   resetDraw();
+  try {
+    const savedDraw = await apiRequest(`/api/tournaments/${encodeURIComponent(tournament.id)}/draw`);
+    if (savedDraw.data) restoreTournamentDraw(savedDraw.data);
+    else resetPhaseDefaults(currentTournamentEntries().length);
+  } catch (error) {
+    resetDraw();
+    resetPhaseDefaults(currentTournamentEntries().length);
+    showNotice(`Die gespeicherte Auslosung konnte nicht geladen werden: ${error.message}`, 'error');
+  }
   setActiveView(state.currentStep);
 }
 
@@ -2619,7 +2975,7 @@ document.addEventListener('click', (event) => {
 
   const tournamentControl = event.target.closest('[data-open-tournament]');
   if (tournamentControl) {
-    openTournament(tournamentControl.dataset.openTournament);
+    void openTournament(tournamentControl.dataset.openTournament);
   }
 });
 

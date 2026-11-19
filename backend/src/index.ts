@@ -78,6 +78,150 @@ async function ensureTournamentEntryIsUnique({ tournamentId, personId, teamId }:
   }
 }
 
+type DrawSeed = { type: 'group'; groupIndex: number; place: number }
+  | { type: 'additional' | 'lucky'; index: number };
+type TournamentDraw = {
+  version: 1;
+  configuration: {
+    groupPhaseEnabled: boolean;
+    groupCount: number;
+    gamesPerPair: number;
+    qualifierCount: number;
+    placementPhaseEnabled: boolean;
+    placementGames: boolean;
+    luckyLosers: boolean;
+  };
+  groups: string[][] | null;
+  directBracketEntries: (string | null)[] | null;
+  brackets: {
+    endRound: (DrawSeed | null)[] | null;
+    luckyLosers: (DrawSeed | null)[] | null;
+  };
+};
+
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function nextDrawBracketSize(entryCount: number): number {
+  let size = 1;
+  while (size < entryCount) size *= 2;
+  return size;
+}
+
+function isDrawSeed(
+  value: unknown,
+  groupSizes: number[],
+  allowedKinds: string[],
+  maxPlaceholderIndex: number,
+): value is DrawSeed {
+  if (!value || typeof value !== 'object') return false;
+  const seed = value as Record<string, unknown>;
+  if (seed.type === 'group') {
+    return Number.isSafeInteger(seed.groupIndex)
+      && Number(seed.groupIndex) >= 0
+      && Number(seed.groupIndex) < groupSizes.length
+      && Number.isSafeInteger(seed.place)
+      && Number(seed.place) > 0
+      && Number(seed.place) <= groupSizes[Number(seed.groupIndex)];
+  }
+  return (seed.type === 'additional' || seed.type === 'lucky')
+    && allowedKinds.includes(seed.type)
+    && Number.isSafeInteger(seed.index)
+    && Number(seed.index) > 0
+    && Number(seed.index) <= maxPlaceholderIndex;
+}
+
+function validDrawSlots(
+  slots: unknown,
+  entryCount: number,
+  groupSizes: number[],
+  allowedKinds: string[],
+  maxPlaceholderIndex: number,
+): slots is (DrawSeed | null)[] {
+  if (!Array.isArray(slots) || slots.length !== nextDrawBracketSize(entryCount)) return false;
+  const seeds = slots.filter((seed) => seed !== null);
+  if (seeds.length !== entryCount
+    || !seeds.every((seed) => isDrawSeed(seed, groupSizes, allowedKinds, maxPlaceholderIndex))) {
+    return false;
+  }
+  const keys = seeds.map((seed) => JSON.stringify(seed));
+  return new Set(keys).size === keys.length;
+}
+
+function isTournamentDraw(value: unknown, tournamentEntryIds: string[]): value is TournamentDraw {
+  if (!value || typeof value !== 'object' || tournamentEntryIds.length < 2) return false;
+  const draw = value as Record<string, unknown>;
+  const configuration = draw.configuration as Record<string, unknown> | null;
+  const brackets = draw.brackets as Record<string, unknown> | null;
+  if (draw.version !== 1 || !configuration || !brackets || Array.isArray(brackets)) return false;
+  const {
+    groupPhaseEnabled,
+    groupCount,
+    gamesPerPair,
+    qualifierCount,
+    placementPhaseEnabled,
+    placementGames,
+    luckyLosers,
+  } = configuration;
+  if (
+    typeof groupPhaseEnabled !== 'boolean'
+    || !Number.isSafeInteger(groupCount)
+    || Number(groupCount) < 1
+    || Number(groupCount) > Math.max(1, Math.floor(tournamentEntryIds.length / 4))
+    || !Number.isSafeInteger(gamesPerPair)
+    || Number(gamesPerPair) < 1
+    || !Number.isSafeInteger(qualifierCount)
+    || Number(qualifierCount) < 4
+    || (Number(qualifierCount) & (Number(qualifierCount) - 1)) !== 0
+    || typeof placementPhaseEnabled !== 'boolean'
+    || typeof placementGames !== 'boolean'
+    || typeof luckyLosers !== 'boolean'
+  ) return false;
+
+  const entries = new Set(tournamentEntryIds);
+  if (groupPhaseEnabled) {
+    if (!Array.isArray(draw.groups) || draw.groups.length !== groupCount || draw.directBracketEntries !== null) return false;
+    const groups = draw.groups as unknown[];
+    const groupSizes: number[] = [];
+    const assigned = groups.flatMap((group) => {
+      if (!Array.isArray(group)) return [];
+      groupSizes.push(group.length);
+      return group;
+    });
+    if (
+      groupSizes.length !== groupCount
+      || assigned.some((id) => typeof id !== 'string' || !uuidPattern.test(id))
+      || assigned.length !== entries.size
+      || new Set(assigned).size !== entries.size
+      || assigned.some((id) => !entries.has(id as string))
+    ) return false;
+
+    const finalCount = Math.min(tournamentEntryIds.length, Number(qualifierCount));
+    const luckyCount = tournamentEntryIds.length - finalCount;
+    const perGroup = Math.min(
+      Math.floor(finalCount / groupCount),
+      ...groupSizes,
+    );
+    const additionalCount = finalCount - perGroup * Number(groupCount);
+    const endRoundSlots = brackets.endRound;
+    const luckySlots = brackets.luckyLosers;
+    if (placementPhaseEnabled) {
+      if (!validDrawSlots(endRoundSlots, finalCount, groupSizes, ['additional'], additionalCount)) return false;
+    } else if (endRoundSlots !== null) return false;
+    if (luckyLosers && luckyCount > 1) {
+      if (!validDrawSlots(luckySlots, luckyCount, groupSizes, ['lucky'], luckyCount)) return false;
+    } else if (luckySlots !== null) return false;
+    return true;
+  }
+
+  if (draw.groups !== null || !Array.isArray(draw.directBracketEntries)) return false;
+  if (brackets.endRound !== null || brackets.luckyLosers !== null) return false;
+  const directEntries = draw.directBracketEntries as unknown[];
+  return directEntries.length === nextDrawBracketSize(tournamentEntryIds.length)
+    && directEntries.filter((id) => id !== null).length === entries.size
+    && directEntries.every((id) => id === null || (typeof id === 'string' && uuidPattern.test(id) && entries.has(id)))
+    && new Set(directEntries.filter((id) => id !== null)).size === entries.size;
+}
+
 app.use(express.json());
 
 app.get('/api/settings', async (_req, res) => {
@@ -271,6 +415,95 @@ app.get('/api/tournaments/:id', async (req, res) => {
       ok: false,
       message: 'Could not load tournament',
     });
+  }
+});
+
+app.get('/api/tournaments/:id/draw', async (req, res) => {
+  if (!uuidPattern.test(req.params.id)) {
+    return res.status(400).json({ ok: false, message: 'Tournament ID is invalid' });
+  }
+  try {
+    const result = await database.query(
+      'SELECT draw FROM tournaments WHERE id = $1',
+      [req.params.id],
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ ok: false, message: 'Tournament not found' });
+    }
+    return res.status(200).json({ ok: true, data: result.rows[0].draw });
+  } catch (error) {
+    console.error('Failed to load tournament draw:', error);
+    return res.status(500).json({ ok: false, message: 'Could not load tournament draw' });
+  }
+});
+
+app.put('/api/tournaments/:id/draw', async (req, res) => {
+  if (!uuidPattern.test(req.params.id)) {
+    return res.status(400).json({ ok: false, message: 'Tournament ID is invalid' });
+  }
+
+  let client: PoolClient;
+  try {
+    client = await database.connect();
+  } catch (error) {
+    console.error('Failed to connect while saving tournament draw:', error);
+    return res.status(500).json({ ok: false, message: 'Could not save tournament draw' });
+  }
+
+  try {
+    await client.query('BEGIN');
+    const tournament = await client.query(
+      'SELECT id FROM tournaments WHERE id = $1 FOR UPDATE',
+      [req.params.id],
+    );
+    if (tournament.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ ok: false, message: 'Tournament not found' });
+    }
+    const entries = await client.query(
+      'SELECT id FROM tournament_entries WHERE tournament_id = $1',
+      [req.params.id],
+    );
+    const entryIds = entries.rows.map((entry) => entry.id as string);
+    if (!isTournamentDraw(req.body, entryIds)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ ok: false, message: 'Tournament draw is invalid for its participants' });
+    }
+    await client.query(
+      'UPDATE tournaments SET draw = $1::jsonb, updated_at = now() WHERE id = $2',
+      [JSON.stringify(req.body), req.params.id],
+    );
+    await client.query('COMMIT');
+    return res.status(200).json({ ok: true, data: req.body });
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      console.error('Failed to roll back tournament draw save:', rollbackError);
+    }
+    console.error('Failed to save tournament draw:', error);
+    return res.status(500).json({ ok: false, message: 'Could not save tournament draw' });
+  } finally {
+    client.release();
+  }
+});
+
+app.delete('/api/tournaments/:id/draw', async (req, res) => {
+  if (!uuidPattern.test(req.params.id)) {
+    return res.status(400).json({ ok: false, message: 'Tournament ID is invalid' });
+  }
+  try {
+    const result = await database.query(
+      'UPDATE tournaments SET draw = NULL, updated_at = now() WHERE id = $1 RETURNING id',
+      [req.params.id],
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ ok: false, message: 'Tournament not found' });
+    }
+    return res.status(200).json({ ok: true, data: null });
+  } catch (error) {
+    console.error('Failed to reset tournament draw:', error);
+    return res.status(500).json({ ok: false, message: 'Could not reset tournament draw' });
   }
 });
 
