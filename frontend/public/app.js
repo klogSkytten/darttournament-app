@@ -59,6 +59,8 @@ const state = {
   drawGroups: null,
   drawBracketEntries: null,
   drawBracketSlots: null,
+  tournamentMatches: [],
+  activeTournamentPhase: null,
   clientConnections: [],
   configuration: {}
 };
@@ -1275,6 +1277,7 @@ function renderRulesStep(section) {
       bull: ruleLabels[preset.bullOutRule]
     };
     const visibilityAttributes = [
+      `data-rule-key="${key}"`,
       rulePhase ? `data-rule-phase="${rulePhase}"` : '',
       minQualifiers ? `data-min-qualifiers="${minQualifiers}"` : '',
       exactQualifiers ? `data-exact-qualifiers="${exactQualifiers}"` : '',
@@ -1789,9 +1792,10 @@ function renderDrawBracket(qualifierCount, directEntries = null, labelPrefix = '
     }
   ).join('');
 
-  return `<div class="draw-bracket">
+  const hasOmittedRounds = bracketSize > 2;
+  return `<div class="draw-bracket${hasOmittedRounds ? '' : ' draw-bracket-single-round'}">
     <section class="bracket-side"><div class="bracket-matches">${renderMatches(0, sideMatchCount)}</div></section>
-    <div class="bracket-omitted-rounds" aria-label="Weitere Endrunden"></div>
+    ${hasOmittedRounds ? '<div class="bracket-omitted-rounds" aria-label="Weitere Endrunden"></div>' : ''}
     <section class="bracket-side"><div class="bracket-matches">${renderMatches(sideMatchCount, firstRoundMatchCount)}</div></section>
   </div>`;
 }
@@ -2070,9 +2074,55 @@ function groupRoundRobin(players) {
   return rounds;
 }
 
+function balanceGroupPairings(pairings) {
+  if (!pairings.length) return [];
+  // Eulerian orientation balances first-listed counts; dummy edges handle odd player degrees.
+  const dummy = {};
+  const adjacency = new Map();
+  const addEdge = (left, right, index) => {
+    const edge = { index, left, right, used: false };
+    if (!adjacency.has(left)) adjacency.set(left, []);
+    if (!adjacency.has(right)) adjacency.set(right, []);
+    adjacency.get(left).push(edge);
+    adjacency.get(right).push(edge);
+  };
+  pairings.forEach(([left, right], index) => addEdge(left, right, index));
+  const participants = [...new Set(pairings.flat())];
+  const oddDegreePlayers = participants.filter((player) => adjacency.get(player).length % 2);
+  oddDegreePlayers.forEach((player) => addEdge(player, dummy, null));
+
+  const orientedPairings = new Array(pairings.length);
+  let startingPlayer = participants.find((player) => adjacency.get(player).some((edge) => !edge.used));
+  while (startingPlayer) {
+    const stack = [{ player: startingPlayer, incoming: null }];
+    const reversedCircuit = [];
+    while (stack.length) {
+      const current = stack[stack.length - 1];
+      const edge = adjacency.get(current.player).find((candidate) => !candidate.used);
+      if (edge) {
+        edge.used = true;
+        const next = edge.left === current.player ? edge.right : edge.left;
+        stack.push({ player: next, incoming: { edge, from: current.player } });
+      } else {
+        const { incoming } = stack.pop();
+        if (incoming) reversedCircuit.push(incoming);
+      }
+    }
+    reversedCircuit.reverse().forEach(({ edge, from }) => {
+      if (edge.index === null) return;
+      orientedPairings[edge.index] = edge.left === from
+        ? [edge.left, edge.right]
+        : [edge.right, edge.left];
+    });
+    startingPlayer = participants.find((player) => adjacency.get(player).some((edge) => !edge.used));
+  }
+  return orientedPairings;
+}
+
 function addPlacementBracket(matches, phase, seeds, placementGames, firstRoundSlots = null) {
   if (seeds.length < 2) return;
   const bracketSize = nextBracketSize(seeds.length);
+  const firstRound = 7 - Math.log2(bracketSize);
   let brackets = [{ seeds, rankStart: 1, slots: firstRoundSlots, depth: 0 }];
   while (brackets.length) {
     const nextBrackets = [];
@@ -2096,6 +2146,7 @@ function addPlacementBracket(matches, phase, seeds, placementGames, firstRoundSl
         }
         const baseRoundName = bracketRoundName(bracketSize, bracket.depth);
         const isPlacementGame = bracket.rankStart > 1;
+        const ruleKey = isPlacementGame ? 'round-7' : `round-${firstRound + bracket.depth}`;
         const match = {
           phase,
           label: bracket.seeds.length === 2
@@ -2106,7 +2157,10 @@ function addPlacementBracket(matches, phase, seeds, placementGames, firstRoundSl
           first,
           second,
           bracketRound: bracket.depth,
-          rankStart: bracket.rankStart
+          rankStart: bracket.rankStart,
+          ruleKey,
+          firstEntryId: first && typeof first === 'object' && !first.match ? first.id : null,
+          secondEntryId: second && typeof second === 'object' && !second.match ? second.id : null
         };
         matches.push(match);
         winners.push({ match, outcome: 'Sieger' });
@@ -2148,12 +2202,30 @@ function buildMatchSchedule() {
       const label = groupLabel(index);
       const drawn = state.drawGroups?.[index];
       const players = Array.from({ length: size }, (_, playerIndex) =>
-        drawn ? drawEntryLabel(drawn[playerIndex]) : `${label}${playerIndex + 1}`
+        ({
+          entryId: drawn ? drawn[playerIndex].id : null,
+          label: drawn ? drawEntryLabel(drawn[playerIndex]) : `${label}${playerIndex + 1}`
+        })
       );
-      return { label, size, rounds: groupRoundRobin(players) };
+      return {
+        label,
+        size,
+        rounds: groupRoundRobin(players),
+        orientedPairings: [],
+        pairingIndex: 0
+      };
     });
     const roundCount = Math.max(0, ...groups.map((group) => group.rounds.length));
     const repetitions = Number(state.configuration.gamesPerPair);
+    groups.forEach((group) => {
+      const pairings = [];
+      for (let repetition = 0; repetition < repetitions; repetition += 1) {
+        for (let round = 0; round < group.rounds.length; round += 1) {
+          pairings.push(...(group.rounds[round] || []));
+        }
+      }
+      group.orientedPairings = balanceGroupPairings(pairings);
+    });
     for (let repetition = 0; repetition < repetitions; repetition += 1) {
       for (let round = 0; round < roundCount; round += 1) {
         const roundMatchCount = Math.max(0, ...groups.map((group) => (group.rounds[round] || []).length));
@@ -2161,8 +2233,19 @@ function buildMatchSchedule() {
           groups.forEach((group) => {
             const pairing = group.rounds[round]?.[game];
             if (pairing) {
-              const [first, second] = pairing;
-              groupMatches.push({ phase: 'Gruppenphase', label: `Gruppe ${group.label}`, first, second });
+              const [first, second] = group.orientedPairings[group.pairingIndex];
+              group.pairingIndex += 1;
+              groupMatches.push({
+                phase: 'Gruppenphase',
+                label: `Gruppe ${group.label}`,
+                first: first.label,
+                second: second.label,
+                firstEntryId: first.entryId,
+                secondEntryId: second.entryId,
+                groupIndex: groups.indexOf(group),
+                roundNumber: repetition * roundCount + round + 1,
+                ruleKey: 'group'
+              });
             }
           });
         }
@@ -2217,7 +2300,7 @@ function buildMatchSchedule() {
       }
     }
   } else {
-    finalists = Array.from({ length: participantCount }, (_, index) => `Teilnehmer ${index + 1}`);
+    finalists = state.drawBracketEntries?.filter(Boolean) || [];
     luckySeeds = [];
     finalSlots = null;
     luckySlots = null;
@@ -2231,7 +2314,7 @@ function buildMatchSchedule() {
     const slots = groupEnabled
       ? finalSlots?.map((seed) => seed ? drawSeedLabel(seed) : null) || null
       : state.drawBracketEntries
-        ? state.drawBracketEntries.map((entry) => entry ? drawEntryLabel(entry) : null)
+        ? state.drawBracketEntries
         : null;
     addPlacementBracket(bracketMatches, 'Endrunde', finalists, state.configuration.placementGames === true, slots);
   }
@@ -2241,34 +2324,205 @@ function buildMatchSchedule() {
 }
 
 function renderMatchSchedule(matches) {
-  const label = (entry) => typeof entry === 'string'
-    ? entry
-    : `${entry.outcome} Spiel ${entry.match.number}`;
+  const label = (entry) => {
+    if (typeof entry === 'string') return entry;
+    if (entry.match) {
+      return `${entry.outcome} ${formatMatchNumber(entry.match.number, matches.length)}`;
+    }
+    return drawEntryLabel(entry);
+  };
   if (!matches.length) return '<div class="match-placeholder">Für die aktuellen Einstellungen sind keine Spiele vorgesehen.</div>';
-  return `<ol class="match-table" aria-label="Spielplan">${matches.map((match) => `
-    <li class="match-row">
-      <span class="match-number">Spiel ${match.number}</span>
+  const matchRecords = new Map(state.tournamentMatches.map((match) => [match.matchNumber, match]));
+  return `<ol class="match-table" aria-label="Spielplan">${matches.map((match) => {
+    const record = matchRecords.get(match.number);
+    const participants = record?.participants || [];
+    const result = record?.winnerEntryId && participants.length === 2
+      ? `<span class="match-result">Sets ${participants[0].setsWon}:${participants[1].setsWon} · Legs ${participants[0].legsWon}:${participants[1].legsWon}</span>`
+      : '';
+    const content = `
+      <span class="match-number">${formatMatchNumber(match.number, matches.length)}</span>
       <span class="match-phase">${escapeHtml(match.phase)} · ${escapeHtml(match.label)}</span>
       <span class="match-players"><span>${escapeHtml(label(match.first))}</span><span class="match-versus">vs.</span><span>${escapeHtml(label(match.second))}</span></span>
-    </li>`).join('')}</ol>`;
+      ${result}`;
+    const editable = record && state.currentTournamentStatus === 'running';
+    return `<li class="match-row">${editable
+      ? `<button class="match-row-action" type="button" data-match-id="${escapeHtml(record.id)}" aria-label="Ergebnis von Spiel ${formatMatchNumber(match.number, matches.length)} bearbeiten">${content}</button>`
+      : `<div class="match-row-static">${content}</div>`}</li>`;
+  }).join('')}</ol>`;
+}
+
+function formatMatchNumber(number, totalMatches) {
+  const width = Math.max(2, String(totalMatches).length);
+  return String(number).padStart(width, '0');
+}
+
+function tournamentStartPayload() {
+  const groupPhaseEnabled = state.configuration.groupPhaseEnabled !== false;
+  const matches = buildMatchSchedule();
+  const activePhaseName = groupPhaseEnabled ? 'Gruppenphase' : 'Endrunde';
+  const activeMatches = matches.filter((match) =>
+    match.phase === activePhaseName && match.firstEntryId && match.secondEntryId
+  );
+  const firstMatch = activeMatches[0];
+  if (!firstMatch) throw new Error('Für die aktive Phase wurden keine startbaren Spiele gefunden.');
+
+  const ruleKey = groupPhaseEnabled ? 'group' : firstMatch.ruleKey;
+  const rulesKey = groupPhaseEnabled
+    ? 'groupPhase'
+    : ruleKey === 'round-5'
+      ? 'endRoundSemifinal'
+      : ruleKey === 'round-6'
+        ? 'endRoundFinal'
+        : 'endRound';
+  const groupRanking = groupPhaseEnabled
+    ? Array.from({ length: 4 }, (_, index) =>
+      state.configuration[`groupRanking-${index}`]
+        || rankingOptionLabels[state.generalSettings.rules.groupRanking[index]]
+    ).filter(Boolean)
+    : [];
+  return {
+    ruleKey,
+    rules: getConfiguredRulePreset(rulesKey, ruleKey),
+    groupRanking,
+    matches: activeMatches.map((match) => ({
+      number: match.number,
+      roundNumber: match.roundNumber || (match.bracketRound ?? 0) + 1,
+      groupIndex: match.groupIndex ?? null,
+      firstEntryId: match.firstEntryId,
+      secondEntryId: match.secondEntryId
+    }))
+  };
+}
+
+function applyTournamentPhaseRules(phase) {
+  if (!phase) return;
+  const settings = phase.settings || {};
+  const ruleKey = settings.ruleKey;
+  if (ruleKey && Number.isSafeInteger(phase.starting_score)) {
+    state.configuration[`start-${ruleKey}`] = String(phase.starting_score);
+    state.configuration[`sets-${ruleKey}`] = String(phase.sets_to_win);
+    state.configuration[`legs-${ruleKey}`] = String(phase.legs_to_win);
+    const ruleLabels = {
+      single_in: 'Single In',
+      double_in: 'Double In',
+      master_in: 'Master In',
+      single_out: 'Single Out',
+      double_out: 'Double Out',
+      master_out: 'Master Out',
+      no_bullout: 'no Bull-Off',
+      classic: 'classic',
+      pdc: 'PDC'
+    };
+    state.configuration[`in-${ruleKey}`] = ruleLabels[phase.start_rule];
+    state.configuration[`out-${ruleKey}`] = ruleLabels[phase.checkout_rule];
+    state.configuration[`bull-${ruleKey}`] = ruleLabels[phase.bull_out_rule];
+  }
+  if (Array.isArray(settings.groupRanking)) {
+    settings.groupRanking.forEach((criterion, index) => {
+      state.configuration[`groupRanking-${index}`] = criterion;
+    });
+  }
+}
+
+async function loadTournamentMatches() {
+  if (!state.currentTournamentId) {
+    state.tournamentMatches = [];
+    state.activeTournamentPhase = null;
+    return;
+  }
+  const result = await apiRequest(
+    `/api/tournaments/${encodeURIComponent(state.currentTournamentId)}/matches`
+  );
+  state.tournamentMatches = result.data.matches || [];
+  state.activeTournamentPhase = result.data.activePhase || null;
+  applyTournamentPhaseRules(state.activeTournamentPhase);
+}
+
+function openMatchResultDialog(matchId) {
+  const record = state.tournamentMatches.find((match) => match.id === matchId);
+  const match = record && buildMatchSchedule().find((item) => item.number === record.matchNumber);
+  const dialog = document.getElementById('matchResultDialog');
+  const form = document.getElementById('matchResultForm');
+  if (!record || !match || record.participants?.length !== 2 || !dialog || !form) {
+    showNotice('Die Spielteilnehmer konnten nicht geladen werden.', 'error');
+    return;
+  }
+
+  const participants = record.participants.slice().sort((left, right) => left.slot - right.slot);
+  const values = [
+    participants[0].setsWon,
+    participants[0].legsWon,
+    participants[1].setsWon,
+    participants[1].legsWon
+  ];
+  document.getElementById('matchResultTitle').textContent =
+    `Ergebnis von Spiel ${formatMatchNumber(record.matchNumber, buildMatchSchedule().length)}`;
+  document.getElementById('matchResultParticipants').textContent =
+    `${participants[0].name} gegen ${participants[1].name}`;
+  document.getElementById('matchResultFirstLabel').textContent = participants[0].name;
+  document.getElementById('matchResultSecondLabel').textContent = participants[1].name;
+  [
+    'matchResultFirstSets',
+    'matchResultFirstLegs',
+    'matchResultSecondSets',
+    'matchResultSecondLegs'
+  ].forEach((id, index) => { document.getElementById(id).value = String(values[index]); });
+  document.getElementById('matchResultError').hidden = true;
+  form.dataset.matchId = record.id;
+  dialog.showModal();
+}
+
+function renderMatchResultDialog() {
+  return `<dialog class="match-result-dialog" id="matchResultDialog" aria-labelledby="matchResultTitle">
+    <form id="matchResultForm">
+      <div class="form-section-header">
+        <div><h2 id="matchResultTitle">Ergebnis eingeben</h2><p class="subtle-copy" id="matchResultParticipants"></p></div>
+        <button class="icon-button" type="button" data-close-match-result aria-label="Ergebnisdialog schließen">×</button>
+      </div>
+      <div class="match-result-grid">
+        <div class="match-result-header"><span></span><span>Sets</span><span>Legs</span></div>
+        <label class="match-result-row"><span id="matchResultFirstLabel">Teilnehmer 1</span>
+          <input id="matchResultFirstSets" name="firstSets" type="number" min="0" step="1" required aria-label="Sets Teilnehmer 1">
+          <input id="matchResultFirstLegs" name="firstLegs" type="number" min="0" step="1" required aria-label="Legs Teilnehmer 1">
+        </label>
+        <label class="match-result-row"><span id="matchResultSecondLabel">Teilnehmer 2</span>
+          <input id="matchResultSecondSets" name="secondSets" type="number" min="0" step="1" required aria-label="Sets Teilnehmer 2">
+          <input id="matchResultSecondLegs" name="secondLegs" type="number" min="0" step="1" required aria-label="Legs Teilnehmer 2">
+        </label>
+      </div>
+      <p class="subtle-copy">Erfasse für beide Seiten die gewonnenen Sets und Legs.</p>
+      <div class="alert alert-error match-result-error" id="matchResultError" role="alert" hidden></div>
+      <div class="form-actions">
+        <button class="button button-quiet" type="button" data-close-match-result>Abbrechen</button>
+        <button class="button button-primary" type="submit">Ergebnis speichern</button>
+      </div>
+    </form>
+  </dialog>`;
 }
 
 function renderResultsStep(section) {
   const entryCount = currentTournamentEntries().length;
   const tournament = state.tournaments.find((item) => item.id === state.currentTournamentId);
+  const tournamentStarted = state.currentTournamentStatus === 'running';
+  const tournamentFinished = state.currentTournamentStatus === 'finished';
   const readyToStart = entryCount === 16 && hasDraw();
   const startMessage = !hasDraw()
     ? 'Für den Start ist die Auslosung erforderlich!'
-    : readyToStart
-      ? 'Die Auslosung liegt vor. Der Turnierstart wird später mit dem Backend verbunden.'
+    : tournamentStarted
+      ? 'Das Turnier läuft. Ergebnisse aktiver Spiele können eingegeben oder geändert werden.'
+      : tournamentFinished
+        ? 'Das Turnier ist beendet.'
+      : readyToStart
+        ? 'Die Auslosung liegt vor. Das Turnier kann gestartet werden.'
       : 'Der Turnierstart ist derzeit nur für 16 Teilnehmer vorbereitet.';
   return `${stepHeading(section)}
     <div class="surface-inset form-section">
-      <div class="form-section-header"><div><h2>Spielplan & Ergebnisse</h2><p class="subtle-copy">${startMessage}</p></div><button class="button button-primary" id="startTournamentButton" type="button" ${readyToStart ? '' : 'disabled'}>Turnier starten</button></div>
+      <div class="form-section-header"><div><h2>Spielplan & Ergebnisse</h2><p class="subtle-copy">${startMessage}</p></div>${tournamentStarted || tournamentFinished ? '' : `<button class="button button-primary" id="startTournamentButton" type="button" ${readyToStart ? '' : 'disabled'}>Turnier starten</button>`}</div>
       ${tournament
-    ? `<p class="subtle-copy">Spielplan-Vorschau · Noch nicht gespeichert.</p>${renderMatchSchedule(buildMatchSchedule())}`
+    ? `${tournamentStarted || tournamentFinished ? '' : '<p class="subtle-copy">Spielplan-Vorschau · Noch nicht gespeichert.</p>'}${renderMatchSchedule(buildMatchSchedule())}`
     : '<div class="match-placeholder">Lege zuerst ein Turnier an, um Begegnungen und Ergebnisse zu verwalten.</div>'}
-    </div>`;
+    </div>
+    ${renderMatchResultDialog()}`;
 }
 
 function renderStep() {
@@ -2285,6 +2539,30 @@ function renderStep() {
     10: renderResultsStep
   };
   stepContentElement.innerHTML = renderers[section.id](section);
+  const tournamentLocked = ['running', 'finished'].includes(state.currentTournamentStatus);
+  if (tournamentLocked && [3, 4, 5, 7].includes(section.id)) {
+    stepContentElement.querySelectorAll('input, select, button').forEach((control) => {
+      control.disabled = true;
+    });
+  }
+  if (tournamentLocked && section.id === 6) {
+    if (state.currentTournamentStatus === 'finished') {
+      stepContentElement.querySelectorAll('[data-config]').forEach((control) => {
+        control.disabled = true;
+      });
+    } else {
+      const activeRuleKey = state.activeTournamentPhase?.settings?.ruleKey;
+      if (activeRuleKey) {
+      stepContentElement.querySelectorAll('[data-rule-key]').forEach((card) => {
+        if (card.dataset.ruleKey === activeRuleKey) {
+          card.querySelectorAll('input, select, button').forEach((control) => {
+            control.disabled = true;
+          });
+        }
+      });
+      }
+    }
+  }
   updateStepControls();
   updateWorkflowStatus();
   renderStepNavigation();
@@ -2811,8 +3089,81 @@ function bindStepActions() {
     }
   });
 
-  document.getElementById('startTournamentButton')?.addEventListener('click', () => {
-    showNotice('Der Turnierstart ist vorbereitet, aber noch nicht mit der Backend-API verbunden.', 'warning');
+  document.getElementById('startTournamentButton')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      const result = await apiRequest(
+        `/api/tournaments/${encodeURIComponent(state.currentTournamentId)}/start`,
+        { method: 'POST', body: JSON.stringify(tournamentStartPayload()) }
+      );
+      state.currentTournamentStatus = result.data.status;
+      state.activeTournamentPhase = result.data.activePhase;
+      const tournament = state.tournaments.find((item) => item.id === state.currentTournamentId);
+      if (tournament) tournament.status = result.data.status;
+      await loadData();
+      await loadTournamentMatches();
+      renderStep();
+      showNotice('Das Turnier wurde gestartet.', 'success');
+    } catch (error) {
+      button.disabled = false;
+      showNotice(error.message, 'error');
+    }
+  });
+
+  stepContentElement.querySelectorAll('[data-match-id]').forEach((button) => {
+    button.addEventListener('click', () => openMatchResultDialog(button.dataset.matchId));
+  });
+  stepContentElement.querySelectorAll('[data-close-match-result]').forEach((button) => {
+    button.addEventListener('click', () => document.getElementById('matchResultDialog')?.close());
+  });
+  document.getElementById('matchResultForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const record = state.tournamentMatches.find((match) => match.id === form.dataset.matchId);
+    if (!record || record.participants?.length !== 2) {
+      showNotice('Die Spielteilnehmer konnten nicht geladen werden.', 'error');
+      return;
+    }
+    const participants = record.participants.slice().sort((left, right) => left.slot - right.slot);
+    const values = [
+      'matchResultFirstSets',
+      'matchResultFirstLegs',
+      'matchResultSecondSets',
+      'matchResultSecondLegs'
+    ].map((id) => Number(document.getElementById(id).value));
+    if (!values.every(Number.isSafeInteger)) {
+      showNotice('Bitte gültige Set- und Leg-Ergebnisse eingeben.', 'error');
+      return;
+    }
+    const submitButton = form.querySelector('[type="submit"]');
+    const errorPanel = document.getElementById('matchResultError');
+    submitButton.disabled = true;
+    errorPanel.hidden = true;
+    try {
+      await apiRequest(
+        `/api/tournaments/${encodeURIComponent(state.currentTournamentId)}/matches/${encodeURIComponent(record.id)}/result`,
+        {
+          method: 'PUT',
+          body: JSON.stringify({
+            results: participants.map((participant, index) => ({
+              tournamentEntryId: participant.tournamentEntryId,
+              setsWon: values[index * 2],
+              legsWon: values[index * 2 + 1]
+            }))
+          })
+        }
+      );
+      document.getElementById('matchResultDialog').close();
+      await loadTournamentMatches();
+      renderStep();
+      showNotice('Das Ergebnis wurde gespeichert.', 'success');
+    } catch (error) {
+      errorPanel.textContent = error.message;
+      errorPanel.hidden = false;
+    } finally {
+      submitButton.disabled = false;
+    }
   });
 
   stepContentElement.querySelectorAll('[data-entry-delete]').forEach((button) => {
@@ -2889,12 +3240,20 @@ async function loadData() {
       state.currentTournamentDate = currentTournament.tournament_date;
       state.currentTournamentStatus = currentTournament.status || state.currentTournamentStatus;
       state.participationFeeEnabled = currentTournament.participation_fee_enabled === true;
+      if (['running', 'finished'].includes(state.currentTournamentStatus)) {
+        await loadTournamentMatches();
+      } else {
+        state.tournamentMatches = [];
+        state.activeTournamentPhase = null;
+      }
       updateWorkflowStatus();
       updateStepControls();
     }
     if (state.currentTournamentId && !state.tournaments.some((item) => item.id === state.currentTournamentId)) {
       state.currentTournamentId = null;
       state.participationFeeEnabled = true;
+      state.tournamentMatches = [];
+      state.activeTournamentPhase = null;
       resetTournamentRuleConfiguration();
       resetPhaseDefaults(0);
     }
@@ -2936,11 +3295,16 @@ async function openTournament(id) {
   state.currentTournamentStatus = tournament.status || 'draft';
   state.participationFeeEnabled = tournament.participation_fee_enabled === true;
   state.currentStep = ['running', 'finished'].includes(state.currentTournamentStatus) ? 10 : 3;
+  state.tournamentMatches = [];
+  state.activeTournamentPhase = null;
   resetDraw();
   try {
     const savedDraw = await apiRequest(`/api/tournaments/${encodeURIComponent(tournament.id)}/draw`);
     if (savedDraw.data) restoreTournamentDraw(savedDraw.data);
     else resetPhaseDefaults(currentTournamentEntries().length);
+    if (['running', 'finished'].includes(state.currentTournamentStatus)) {
+      await loadTournamentMatches();
+    }
   } catch (error) {
     resetDraw();
     resetPhaseDefaults(currentTournamentEntries().length);
@@ -2958,6 +3322,8 @@ document.addEventListener('click', (event) => {
     state.currentTournamentDate = null;
     state.currentTournamentStatus = 'draft';
     state.participationFeeEnabled = true;
+    state.tournamentMatches = [];
+    state.activeTournamentPhase = null;
     state.currentStep = 3;
     resetTournamentRuleConfiguration();
     resetPhaseDefaults(0);
@@ -3008,6 +3374,8 @@ document.addEventListener('click', async (event) => {
     state.currentTournamentDate = null;
     state.currentTournamentStatus = 'draft';
     state.participationFeeEnabled = true;
+    state.tournamentMatches = [];
+    state.activeTournamentPhase = null;
     state.entries = [];
     state.persons = [];
     state.teams = [];

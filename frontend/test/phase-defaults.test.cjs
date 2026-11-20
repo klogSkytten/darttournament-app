@@ -396,6 +396,23 @@ test('pre-draw schedule contains only group placeholder matches', async () => {
   assert.ok(result.some(([, first, second]) => first === 'A1' && second === 'A6'));
 });
 
+test('match numbers are padded to the total schedule width without the Spiel prefix', async () => {
+  const { context } = await createApp();
+  const numbers = JSON.parse(vm.runInContext(`JSON.stringify([
+    formatMatchNumber(5, 99),
+    formatMatchNumber(8, 101),
+    formatMatchNumber(5, 100),
+    formatMatchNumber(8, 1000)
+  ])`, context));
+  assert.deepEqual(numbers, ['05', '008', '005', '0008']);
+  const markup = vm.runInContext(
+    `renderMatchSchedule([{ number: 5, phase: 'Gruppenphase', label: 'Gruppe A', first: 'Ada', second: 'Ben' }])`,
+    context
+  );
+  assert.ok(markup.includes('<span class="match-number">05</span>'));
+  assert.doesNotMatch(markup, /class="match-number">Spiel/);
+});
+
 test('group schedule avoids consecutive games for the same participant when possible', async () => {
   const { context } = await createApp();
   const result = JSON.parse(vm.runInContext(`
@@ -414,6 +431,58 @@ test('group schedule avoids consecutive games for the same participant when poss
     assert.ok(!result[index - 1].some((id) => result[index].includes(id)),
       `participant repeated in consecutive group matches ${index} and ${index + 1}`);
   }
+});
+
+test('group games balance first-listed appearances across participants', async () => {
+  const { context } = await createApp();
+  const actual = JSON.parse(vm.runInContext(`
+    (() => {
+      const results = [];
+      for (const [participantCount, repetitions] of [[6, 2], [5, 1]]) {
+        state.currentTournamentId = 't';
+        state.entries = Array.from({ length: participantCount }, (_, id) => ({
+          id, tournament_id: 't', person_id: id, person_first_name: 'Player ' + id
+        }));
+        resetPhaseDefaults(participantCount);
+        state.configuration.groupCount = '1';
+        state.configuration.gamesPerPair = String(repetitions);
+        state.drawGroups = [state.entries];
+        const matches = buildMatchSchedule()
+          .filter((match) => match.phase === 'Gruppenphase');
+        const appearances = new Map();
+        const firstAppearances = new Map(
+          state.drawGroups[0].map(drawEntryLabel).map((label) => [label, 0])
+        );
+        matches.forEach(({ first, second }) => {
+          appearances.set(first, (appearances.get(first) || 0) + 1);
+          appearances.set(second, (appearances.get(second) || 0) + 1);
+          firstAppearances.set(first, (firstAppearances.get(first) || 0) + 1);
+        });
+        results.push({
+          appearances: [...appearances.values()],
+          firstAppearances: [...firstAppearances.values()]
+        });
+      }
+      return JSON.stringify(results);
+    })()
+  `, context));
+
+  for (const { appearances, firstAppearances } of actual) {
+    assert.equal(new Set(appearances).size, 1);
+    assert.ok(
+      Math.max(...firstAppearances) - Math.min(...firstAppearances) <= 1,
+      `first-listed counts differ by more than one: ${firstAppearances.join(', ')}`
+    );
+  }
+});
+
+test('single-match brackets omit the further-round divider', async () => {
+  const { context } = await createApp();
+  const twoPlayers = vm.runInContext(`renderDrawBracket(2, null, 'Lucky')`, context);
+  const fourPlayers = vm.runInContext(`renderDrawBracket(4, null, 'Lucky')`, context);
+  assert.match(twoPlayers, /draw-bracket-single-round/);
+  assert.doesNotMatch(twoPlayers, /bracket-omitted-rounds/);
+  assert.match(fourPlayers, /bracket-omitted-rounds/);
 });
 
 test('bracket scheduling uses available matches to avoid consecutive participants', async () => {
@@ -627,7 +696,7 @@ test('schedule counts agree with badges across phase settings and byes', async (
             }
             for (const match of matches) {
               for (const entry of [match.first, match.second]) {
-                if (typeof entry !== 'string' && entry.match.number >= match.number) return 'forward reference';
+                if (entry?.match?.number >= match.number) return 'forward reference';
               }
             }
           }
@@ -740,8 +809,12 @@ test('direct knockout schedule uses drawn pairings and passes byes forward', asy
     state.drawBracketEntries = [state.entries[0], null, state.entries[1], state.entries[2]];
     JSON.stringify(buildMatchSchedule().map((match) => ({
       number: match.number, label: match.label,
-      first: typeof match.first === 'string' ? match.first : match.first.outcome + ' Spiel ' + match.first.match.number,
-      second: typeof match.second === 'string' ? match.second : match.second.outcome + ' Spiel ' + match.second.match.number
+      first: typeof match.first === 'string' ? match.first : match.first.match
+        ? match.first.outcome + ' Spiel ' + match.first.match.number
+        : drawEntryLabel(match.first),
+      second: typeof match.second === 'string' ? match.second : match.second.match
+        ? match.second.outcome + ' Spiel ' + match.second.match.number
+        : drawEntryLabel(match.second)
     })));
   `, context));
   assert.deepEqual(result, [

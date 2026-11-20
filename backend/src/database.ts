@@ -137,6 +137,52 @@ export async function bootstrapDatabase(pool: Pool = database): Promise<void> {
       ALTER TABLE tournament_entry_members
         ADD COLUMN IF NOT EXISTS participation_fee_paid BOOLEAN NOT NULL DEFAULT false;
 
+      CREATE OR REPLACE FUNCTION prevent_started_tournament_entry_changes()
+      RETURNS TRIGGER
+      LANGUAGE plpgsql
+      AS $$
+      DECLARE
+        affected_tournament_id UUID;
+        tournament_status TEXT;
+      BEGIN
+        IF TG_OP = 'DELETE' THEN
+          affected_tournament_id := OLD.tournament_id;
+        ELSE
+          affected_tournament_id := NEW.tournament_id;
+        END IF;
+        SELECT status INTO tournament_status
+        FROM tournaments
+        WHERE id = affected_tournament_id
+        FOR UPDATE;
+        IF tournament_status IN ('running', 'finished') THEN
+          RAISE EXCEPTION 'Tournament participants are locked after start'
+            USING ERRCODE = '55000';
+        END IF;
+
+        IF TG_OP = 'UPDATE' AND OLD.tournament_id <> NEW.tournament_id THEN
+          SELECT status INTO tournament_status
+          FROM tournaments
+          WHERE id = OLD.tournament_id
+          FOR UPDATE;
+          IF tournament_status IN ('running', 'finished') THEN
+            RAISE EXCEPTION 'Tournament participants are locked after start'
+              USING ERRCODE = '55000';
+          END IF;
+        END IF;
+
+        IF TG_OP = 'DELETE' THEN
+          RETURN OLD;
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+
+      DROP TRIGGER IF EXISTS tournament_entries_prevent_started_changes ON tournament_entries;
+      CREATE TRIGGER tournament_entries_prevent_started_changes
+        BEFORE INSERT OR UPDATE OR DELETE ON tournament_entries
+        FOR EACH ROW
+        EXECUTE FUNCTION prevent_started_tournament_entry_changes();
+
       CREATE TABLE IF NOT EXISTS tournament_phases (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         tournament_id UUID NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
@@ -154,6 +200,10 @@ export async function bootstrapDatabase(pool: Pool = database): Promise<void> {
         UNIQUE (tournament_id, phase_order),
         UNIQUE (id, tournament_id)
       );
+
+      ALTER TABLE tournament_phases
+        ADD COLUMN IF NOT EXISTS settings JSONB NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(settings) = 'object');
 
       CREATE TABLE IF NOT EXISTS tournament_phase_rules (
         phase_id UUID PRIMARY KEY REFERENCES tournament_phases(id) ON DELETE CASCADE,

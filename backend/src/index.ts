@@ -98,8 +98,65 @@ type TournamentDraw = {
     luckyLosers: (DrawSeed | null)[] | null;
   };
 };
+type TournamentMatchRules = {
+  setsToWin: number;
+  legsToWin: number;
+  startingScore: number;
+  startRule: 'single_in' | 'double_in' | 'master_in';
+  checkoutRule: 'single_out' | 'double_out' | 'master_out';
+  bullOutRule: 'no_bullout' | 'classic' | 'pdc';
+};
+type TournamentStartMatch = {
+  number: number;
+  roundNumber: number;
+  groupIndex: number | null;
+  firstEntryId: string;
+  secondEntryId: string;
+};
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isTournamentMatchRules(value: unknown): value is TournamentMatchRules {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const rules = value as Record<string, unknown>;
+  return Number.isSafeInteger(rules.setsToWin)
+    && Number(rules.setsToWin) >= 1
+    && Number(rules.setsToWin) <= 4
+    && Number.isSafeInteger(rules.legsToWin)
+    && Number(rules.legsToWin) >= 2
+    && Number(rules.legsToWin) <= 6
+    && [301, 501, 701, 901].includes(Number(rules.startingScore))
+    && ['single_in', 'double_in', 'master_in'].includes(String(rules.startRule))
+    && ['single_out', 'double_out', 'master_out'].includes(String(rules.checkoutRule))
+    && ['no_bullout', 'classic', 'pdc'].includes(String(rules.bullOutRule));
+}
+
+function isTournamentStartMatch(value: unknown): value is TournamentStartMatch {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const match = value as Record<string, unknown>;
+  return Number.isSafeInteger(match.number)
+    && Number(match.number) > 0
+    && Number.isSafeInteger(match.roundNumber)
+    && Number(match.roundNumber) > 0
+    && (match.groupIndex === null
+      || (Number.isSafeInteger(match.groupIndex) && Number(match.groupIndex) >= 0))
+    && typeof match.firstEntryId === 'string'
+    && uuidPattern.test(match.firstEntryId)
+    && typeof match.secondEntryId === 'string'
+    && uuidPattern.test(match.secondEntryId)
+    && match.firstEntryId !== match.secondEntryId;
+}
+
+function drawGroupLabel(index: number): string {
+  let value = index + 1;
+  let label = '';
+  while (value > 0) {
+    value -= 1;
+    label = `${String.fromCharCode(65 + (value % 26))}${label}`;
+    value = Math.floor(value / 26);
+  }
+  return label;
+}
 
 function nextDrawBracketSize(entryCount: number): number {
   let size = 1;
@@ -453,12 +510,16 @@ app.put('/api/tournaments/:id/draw', async (req, res) => {
   try {
     await client.query('BEGIN');
     const tournament = await client.query(
-      'SELECT id FROM tournaments WHERE id = $1 FOR UPDATE',
+      'SELECT id, status FROM tournaments WHERE id = $1 FOR UPDATE',
       [req.params.id],
     );
     if (tournament.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json({ ok: false, message: 'Tournament not found' });
+    }
+    if (['running', 'finished'].includes(tournament.rows[0].status)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ ok: false, message: 'The draw cannot be changed after the tournament starts' });
     }
     const entries = await client.query(
       'SELECT id FROM tournament_entries WHERE tournament_id = $1',
@@ -494,16 +555,517 @@ app.delete('/api/tournaments/:id/draw', async (req, res) => {
   }
   try {
     const result = await database.query(
-      'UPDATE tournaments SET draw = NULL, updated_at = now() WHERE id = $1 RETURNING id',
+      "UPDATE tournaments SET draw = NULL, updated_at = now() WHERE id = $1 AND status NOT IN ('running', 'finished') RETURNING id",
       [req.params.id],
     );
     if (result.rows.length === 0) {
+      const tournament = await database.query(
+        'SELECT status FROM tournaments WHERE id = $1',
+        [req.params.id],
+      );
+      if (tournament.rows.length > 0) {
+        return res.status(409).json({ ok: false, message: 'The draw cannot be changed after the tournament starts' });
+      }
       return res.status(404).json({ ok: false, message: 'Tournament not found' });
     }
     return res.status(200).json({ ok: true, data: null });
   } catch (error) {
     console.error('Failed to reset tournament draw:', error);
     return res.status(500).json({ ok: false, message: 'Could not reset tournament draw' });
+  }
+});
+
+app.post('/api/tournaments/:id/start', async (req, res) => {
+  if (!uuidPattern.test(req.params.id)) {
+    return res.status(400).json({ ok: false, message: 'Tournament ID is invalid' });
+  }
+  if (!Array.isArray(req.body?.matches)
+    || !req.body.matches.every(isTournamentStartMatch)
+    || !isTournamentMatchRules(req.body?.rules)
+    || typeof req.body?.ruleKey !== 'string'
+    || !Array.isArray(req.body?.groupRanking)
+    || !req.body.groupRanking.every((criterion: unknown) => typeof criterion === 'string')) {
+    return res.status(400).json({ ok: false, message: 'Tournament start configuration is invalid' });
+  }
+
+  let client: PoolClient;
+  try {
+    client = await database.connect();
+  } catch (error) {
+    console.error('Failed to connect while starting tournament:', error);
+    return res.status(500).json({ ok: false, message: 'Could not start tournament' });
+  }
+
+  try {
+    await client.query('BEGIN');
+    const tournamentResult = await client.query(
+      'SELECT id, status, draw FROM tournaments WHERE id = $1 FOR UPDATE',
+      [req.params.id],
+    );
+    if (tournamentResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ ok: false, message: 'Tournament not found' });
+    }
+    const tournament = tournamentResult.rows[0];
+    if (!['draft', 'open'].includes(tournament.status)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ ok: false, message: 'Tournament has already started' });
+    }
+
+    const entryResult = await client.query(
+      'SELECT id FROM tournament_entries WHERE tournament_id = $1 ORDER BY created_at, id',
+      [req.params.id],
+    );
+    const entryIds = entryResult.rows.map((entry) => entry.id as string);
+    const draw = tournament.draw as TournamentDraw | null;
+    if (!draw || !isTournamentDraw(draw, entryIds)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ ok: false, message: 'A valid saved draw is required to start the tournament' });
+    }
+
+    const groupPhaseEnabled = draw.configuration.groupPhaseEnabled;
+    const matchPayload = req.body.matches as TournamentStartMatch[];
+    const expectedPairs = new Map<string, number>();
+    const pairKey = (first: string, second: string, groupIndex: number | null) =>
+      `${groupIndex === null ? '' : `${groupIndex}:`}${[first, second].sort().join(':')}`;
+    if (groupPhaseEnabled) {
+      draw.groups?.forEach((group, groupIndex) => {
+        for (let firstIndex = 0; firstIndex < group.length; firstIndex += 1) {
+          for (let secondIndex = firstIndex + 1; secondIndex < group.length; secondIndex += 1) {
+            expectedPairs.set(
+              pairKey(group[firstIndex], group[secondIndex], groupIndex),
+              draw.configuration.gamesPerPair,
+            );
+          }
+        }
+      });
+    } else {
+      draw.directBracketEntries?.forEach((entryId, index, slots) => {
+        if (index % 2 === 0 && entryId && slots[index + 1]) {
+          expectedPairs.set(pairKey(entryId, slots[index + 1] as string, null), 1);
+        }
+      });
+    }
+
+    const actualPairs = new Map<string, number>();
+    const matchNumbers = new Set<number>();
+    const groups = groupPhaseEnabled ? draw.groups || [] : [];
+    let validSchedule = matchPayload.length > 0;
+    matchPayload.forEach((match) => {
+      if (matchNumbers.has(match.number)
+        || (groupPhaseEnabled && (!Number.isSafeInteger(match.groupIndex)
+          || match.groupIndex === null
+          || match.groupIndex >= groups.length
+          || !groups[match.groupIndex].includes(match.firstEntryId)
+          || !groups[match.groupIndex].includes(match.secondEntryId)))
+        || (!groupPhaseEnabled && match.groupIndex !== null)) {
+        validSchedule = false;
+        return;
+      }
+      matchNumbers.add(match.number);
+      const key = pairKey(match.firstEntryId, match.secondEntryId, match.groupIndex);
+      actualPairs.set(key, (actualPairs.get(key) || 0) + 1);
+    });
+    if (actualPairs.size !== expectedPairs.size
+      || [...expectedPairs].some(([key, count]) => actualPairs.get(key) !== count)
+      || !validSchedule) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ ok: false, message: 'The active-phase match schedule does not match the saved draw' });
+    }
+
+    const ruleKey = groupPhaseEnabled ? 'group' : req.body.ruleKey as string;
+    if (groupPhaseEnabled && req.body.ruleKey !== 'group') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ ok: false, message: 'The group phase rule key is invalid' });
+    }
+    if (!groupPhaseEnabled && !/^round-[1-7]$/.test(ruleKey)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ ok: false, message: 'The knockout phase rule key is invalid' });
+    }
+    const allowedRankingCriteria = ['Platzierung', 'Siege', 'Leg-Differenz', '3-Dart-Average'];
+    const groupRanking = req.body.groupRanking as unknown[];
+    if (groupPhaseEnabled
+      && (groupRanking.some((criterion) => !allowedRankingCriteria.includes(String(criterion)))
+        || new Set(groupRanking).size !== groupRanking.length)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ ok: false, message: 'Group ranking criteria are invalid' });
+    }
+
+    const phaseName = groupPhaseEnabled ? 'Gruppenphase' : 'Endrunde';
+    const phaseType = groupPhaseEnabled ? 'group' : 'knockout';
+    const settings = { ruleKey, groupRanking: groupPhaseEnabled ? groupRanking : [] };
+    const phaseResult = await client.query(
+      `
+        INSERT INTO tournament_phases
+          (tournament_id, phase_type, name, phase_order, status, started_at, settings)
+        VALUES ($1, $2, $3, 1, 'in_progress', now(), $4::jsonb)
+        RETURNING id, phase_type, name, phase_order, round_number, status, settings, started_at
+      `,
+      [req.params.id, phaseType, phaseName, JSON.stringify(settings)],
+    );
+    const phase = phaseResult.rows[0];
+    const phaseGroupIds = new Map<number, string>();
+    if (groupPhaseEnabled) {
+      for (const [groupIndex, group] of groups.entries()) {
+        const groupResult = await client.query(
+          `
+            INSERT INTO tournament_phase_groups (tournament_id, phase_id, name, group_order)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+          `,
+          [req.params.id, phase.id, `Gruppe ${drawGroupLabel(groupIndex)}`, groupIndex + 1],
+        );
+        const groupId = groupResult.rows[0].id as string;
+        phaseGroupIds.set(groupIndex, groupId);
+        for (const [seedIndex, entryId] of group.entries()) {
+          await client.query(
+            `
+              INSERT INTO tournament_phase_entries
+                (tournament_id, phase_id, tournament_entry_id, group_id, seed)
+              VALUES ($1, $2, $3, $4, $5)
+            `,
+            [req.params.id, phase.id, entryId, groupId, seedIndex + 1],
+          );
+        }
+      }
+    } else {
+      for (const [seedIndex, entryId] of (draw.directBracketEntries || []).entries()) {
+        if (entryId) {
+          await client.query(
+            `
+              INSERT INTO tournament_phase_entries
+                (tournament_id, phase_id, tournament_entry_id, seed)
+              VALUES ($1, $2, $3, $4)
+            `,
+            [req.params.id, phase.id, entryId, seedIndex + 1],
+          );
+        }
+      }
+    }
+
+    const rules = req.body.rules as TournamentMatchRules;
+    await client.query(
+      `
+        INSERT INTO tournament_phase_rules
+          (phase_id, sets_to_win, legs_to_win, starting_score, start_rule, checkout_rule, bull_out_rule)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `,
+      [
+        phase.id,
+        rules.setsToWin,
+        rules.legsToWin,
+        rules.startingScore,
+        rules.startRule,
+        rules.checkoutRule,
+        rules.bullOutRule,
+      ],
+    );
+
+    for (const match of matchPayload) {
+      const matchResult = await client.query(
+        `
+          INSERT INTO tournament_matches
+            (tournament_id, phase_id, group_id, round_number, match_number)
+          VALUES ($1, $2, $3, $4, $5)
+          RETURNING id
+        `,
+        [
+          req.params.id,
+          phase.id,
+          match.groupIndex === null ? null : phaseGroupIds.get(match.groupIndex),
+          match.roundNumber,
+          match.number,
+        ],
+      );
+      const matchId = matchResult.rows[0].id as string;
+      for (const [slotIndex, tournamentEntryId] of [
+        match.firstEntryId,
+        match.secondEntryId,
+      ].entries()) {
+        await client.query(
+          `
+            INSERT INTO tournament_match_participants
+              (tournament_id, phase_id, match_id, tournament_entry_id, slot)
+            VALUES ($1, $2, $3, $4, $5)
+          `,
+          [req.params.id, phase.id, matchId, tournamentEntryId, slotIndex + 1],
+        );
+      }
+    }
+
+    await client.query(
+      "UPDATE tournaments SET status = 'running', updated_at = now() WHERE id = $1",
+      [req.params.id],
+    );
+    await client.query('COMMIT');
+    return res.status(200).json({
+      ok: true,
+      data: { status: 'running', activePhase: phase },
+    });
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      console.error('Failed to roll back tournament start:', rollbackError);
+    }
+    console.error('Failed to start tournament:', error);
+    return res.status(500).json({ ok: false, message: 'Could not start tournament' });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/tournaments/:id/matches', async (req, res) => {
+  if (!uuidPattern.test(req.params.id)) {
+    return res.status(400).json({ ok: false, message: 'Tournament ID is invalid' });
+  }
+  try {
+    const phaseResult = await database.query(
+      `
+        SELECT
+          tp.id, tp.phase_type, tp.name, tp.phase_order, tp.round_number, tp.status,
+          tp.settings, tpr.sets_to_win, tpr.legs_to_win, tpr.starting_score,
+          tpr.start_rule, tpr.checkout_rule, tpr.bull_out_rule
+        FROM tournament_phases tp
+        LEFT JOIN tournament_phase_rules tpr ON tpr.phase_id = tp.id
+        WHERE tp.tournament_id = $1
+        ORDER BY tp.phase_order
+      `,
+      [req.params.id],
+    );
+    const matchResult = await database.query(
+      `
+        SELECT
+          tm.id, tm.match_number, tm.round_number, tm.status AS match_status,
+          tp.phase_type, tp.name AS phase_name, tp.status AS phase_status,
+          tpr.sets_to_win, tpr.legs_to_win, tpr.starting_score,
+          tpr.start_rule, tpr.checkout_rule, tpr.bull_out_rule,
+          tmp.slot, tmp.tournament_entry_id,
+          COALESCE(team.name, concat_ws(' ', person.first_name, person.last_name)) AS participant_name,
+          COALESCE(ter.sets_won, 0) AS sets_won,
+          COALESCE(ter.legs_won, 0) AS legs_won,
+          tmr.tournament_entry_id AS winner_entry_id
+        FROM tournament_matches tm
+        JOIN tournament_phases tp ON tp.id = tm.phase_id
+        LEFT JOIN tournament_phase_rules tpr ON tpr.phase_id = tp.id
+        LEFT JOIN tournament_match_participants tmp ON tmp.match_id = tm.id
+        LEFT JOIN tournament_entries te ON te.id = tmp.tournament_entry_id
+        LEFT JOIN persons person ON person.id = te.person_id
+        LEFT JOIN teams team ON team.id = te.team_id
+        LEFT JOIN tournament_match_entry_results ter
+          ON ter.match_id = tm.id AND ter.tournament_entry_id = tmp.tournament_entry_id
+        LEFT JOIN tournament_match_results tmr ON tmr.match_id = tm.id
+        WHERE tm.tournament_id = $1
+        ORDER BY tm.match_number, tmp.slot
+      `,
+      [req.params.id],
+    );
+
+    const matchesById = new Map<string, Record<string, unknown> & { participants: unknown[] }>();
+    for (const row of matchResult.rows) {
+      let match = matchesById.get(row.id as string);
+      if (!match) {
+        match = {
+          id: row.id,
+          matchNumber: row.match_number,
+          roundNumber: row.round_number,
+          status: row.match_status,
+          phaseType: row.phase_type,
+          phaseName: row.phase_name,
+          phaseStatus: row.phase_status,
+          rules: row.sets_to_win === null ? null : {
+            setsToWin: row.sets_to_win,
+            legsToWin: row.legs_to_win,
+            startingScore: row.starting_score,
+            startRule: row.start_rule,
+            checkoutRule: row.checkout_rule,
+            bullOutRule: row.bull_out_rule,
+          },
+          winnerEntryId: row.winner_entry_id,
+          participants: [],
+        };
+        matchesById.set(row.id as string, match);
+      }
+      if (row.tournament_entry_id) {
+        match.participants.push({
+          slot: row.slot,
+          tournamentEntryId: row.tournament_entry_id,
+          name: row.participant_name,
+          setsWon: row.sets_won,
+          legsWon: row.legs_won,
+        });
+      }
+    }
+    return res.status(200).json({
+      ok: true,
+      data: {
+        phases: phaseResult.rows,
+        activePhase: phaseResult.rows.find((phase) => phase.status === 'in_progress') || null,
+        matches: [...matchesById.values()],
+      },
+    });
+  } catch (error) {
+    console.error('Failed to load tournament matches:', error);
+    return res.status(500).json({ ok: false, message: 'Could not load tournament matches' });
+  }
+});
+
+app.put('/api/tournaments/:id/matches/:matchId/result', async (req, res) => {
+  if (!uuidPattern.test(req.params.id) || !uuidPattern.test(req.params.matchId)) {
+    return res.status(400).json({ ok: false, message: 'Tournament or match ID is invalid' });
+  }
+  const results = req.body?.results;
+  if (!Array.isArray(results) || results.length !== 2
+    || !results.every((result: unknown) => {
+      if (!result || typeof result !== 'object' || Array.isArray(result)) return false;
+      const score = result as Record<string, unknown>;
+      return typeof score.tournamentEntryId === 'string'
+        && uuidPattern.test(score.tournamentEntryId)
+        && Number.isSafeInteger(score.setsWon)
+        && Number(score.setsWon) >= 0
+        && Number.isSafeInteger(score.legsWon)
+        && Number(score.legsWon) >= 0;
+    })
+    || new Set(results.map((result: { tournamentEntryId: string }) => result.tournamentEntryId)).size !== 2) {
+    return res.status(400).json({ ok: false, message: 'Match result is invalid' });
+  }
+
+  let client: PoolClient;
+  try {
+    client = await database.connect();
+  } catch (error) {
+    console.error('Failed to connect while saving match result:', error);
+    return res.status(500).json({ ok: false, message: 'Could not save match result' });
+  }
+  try {
+    await client.query('BEGIN');
+    const tournamentResult = await client.query(
+      'SELECT status FROM tournaments WHERE id = $1 FOR UPDATE',
+      [req.params.id],
+    );
+    if (tournamentResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ ok: false, message: 'Tournament not found' });
+    }
+    if (tournamentResult.rows[0].status !== 'running') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ ok: false, message: 'Tournament is not running' });
+    }
+
+    const matchResult = await client.query(
+      `
+        SELECT
+          tm.status AS match_status, tp.status AS phase_status,
+          tpr.sets_to_win, tpr.legs_to_win
+        FROM tournament_matches tm
+        JOIN tournament_phases tp ON tp.id = tm.phase_id
+        JOIN tournament_phase_rules tpr ON tpr.phase_id = tp.id
+        WHERE tm.id = $1 AND tm.tournament_id = $2
+        FOR UPDATE OF tm, tp
+      `,
+      [req.params.matchId, req.params.id],
+    );
+    if (matchResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ ok: false, message: 'Match not found' });
+    }
+    const match = matchResult.rows[0];
+    if (match.phase_status !== 'in_progress'
+      || !['scheduled', 'completed'].includes(match.match_status)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ ok: false, message: 'Match is not editable in the active phase' });
+    }
+
+    const participantResult = await client.query(
+      `
+        SELECT tournament_entry_id
+        FROM tournament_match_participants
+        WHERE match_id = $1
+        ORDER BY slot
+      `,
+      [req.params.matchId],
+    );
+    const participantIds = participantResult.rows.map((participant) => participant.tournament_entry_id as string);
+    if (participantIds.length !== 2
+      || participantIds.some((entryId) => !results.some(
+        (result: { tournamentEntryId: string }) => result.tournamentEntryId === entryId
+      ))) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ ok: false, message: 'Result entries do not match the match participants' });
+    }
+
+    const scoreByEntry = new Map(
+      (results as Array<{ tournamentEntryId: string; setsWon: number; legsWon: number }>)
+        .map((result) => [result.tournamentEntryId, result]),
+    );
+    const firstScore = scoreByEntry.get(participantIds[0]);
+    const secondScore = scoreByEntry.get(participantIds[1]);
+    if (!firstScore || !secondScore) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ ok: false, message: 'Result entries do not match the match participants' });
+    }
+    let winnerEntryId: string | null = null;
+    if (Number(match.sets_to_win) === 1) {
+      if (firstScore.setsWon === 1 && secondScore.setsWon === 0
+        && firstScore.legsWon >= Number(match.legs_to_win)
+        && firstScore.legsWon > secondScore.legsWon
+        && secondScore.legsWon < Number(match.legs_to_win)) {
+        winnerEntryId = participantIds[0];
+      } else if (secondScore.setsWon === 1 && firstScore.setsWon === 0
+        && secondScore.legsWon >= Number(match.legs_to_win)
+        && secondScore.legsWon > firstScore.legsWon
+        && firstScore.legsWon < Number(match.legs_to_win)) {
+        winnerEntryId = participantIds[1];
+      }
+    } else if (firstScore.setsWon === Number(match.sets_to_win)
+      && secondScore.setsWon < Number(match.sets_to_win)) {
+      winnerEntryId = participantIds[0];
+    } else if (secondScore.setsWon === Number(match.sets_to_win)
+      && firstScore.setsWon < Number(match.sets_to_win)) {
+      winnerEntryId = participantIds[1];
+    }
+    if (!winnerEntryId) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ ok: false, message: 'Match result does not satisfy the phase rules' });
+    }
+
+    await client.query(
+      `
+        INSERT INTO tournament_match_results (match_id, tournament_entry_id)
+        VALUES ($1, $2)
+        ON CONFLICT (match_id) DO UPDATE
+        SET tournament_entry_id = EXCLUDED.tournament_entry_id, recorded_at = now()
+      `,
+      [req.params.matchId, winnerEntryId],
+    );
+    for (const result of results as Array<{ tournamentEntryId: string; setsWon: number; legsWon: number }>) {
+      await client.query(
+        `
+          INSERT INTO tournament_match_entry_results
+            (match_id, tournament_entry_id, sets_won, legs_won)
+          VALUES ($1, $2, $3, $4)
+          ON CONFLICT (match_id, tournament_entry_id) DO UPDATE
+          SET sets_won = EXCLUDED.sets_won, legs_won = EXCLUDED.legs_won
+        `,
+        [req.params.matchId, result.tournamentEntryId, result.setsWon, result.legsWon],
+      );
+    }
+    await client.query(
+      "UPDATE tournament_matches SET status = 'completed', started_at = COALESCE(started_at, now()), completed_at = now(), updated_at = now() WHERE id = $1",
+      [req.params.matchId],
+    );
+    await client.query('COMMIT');
+    return res.status(200).json({ ok: true, data: { winnerEntryId } });
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      console.error('Failed to roll back match result:', rollbackError);
+    }
+    console.error('Failed to save match result:', error);
+    return res.status(500).json({ ok: false, message: 'Could not save match result' });
+  } finally {
+    client.release();
   }
 });
 
@@ -638,13 +1200,20 @@ app.put('/api/tournaments/:id', async (req, res) => {
         SET name = $1,
             tournament_date = $2,
             updated_at = now()
-        WHERE id = $3
+          WHERE id = $3 AND status IN ('draft', 'open')
         RETURNING *, to_char(tournament_date, 'YYYY-MM-DD') AS tournament_date
       `,
       [name.trim(), tournamentDate || null, req.params.id],
     );
 
     if (result.rows.length === 0) {
+      const existingTournament = await database.query(
+        'SELECT status FROM tournaments WHERE id = $1',
+        [req.params.id],
+      );
+      if (existingTournament.rows.length > 0) {
+        return res.status(409).json({ ok: false, message: 'Tournament details cannot be changed after the tournament starts' });
+      }
       return res.status(404).json({
         ok: false,
         message: 'Tournament not found',
@@ -1033,7 +1602,7 @@ app.post('/api/tournament-participants', async (req, res) => {
     }
     console.error('Failed to register tournament participant:', error);
     const message = error instanceof Error ? error.message : 'Could not register tournament participant';
-    const statusCode = /already|registered|conflict|duplicate/i.test(message) ? 409 : 500;
+    const statusCode = /already|registered|conflict|duplicate|locked|started/i.test(message) ? 409 : 500;
     return res.status(statusCode).json({
       ok: false,
       message: statusCode === 409 ? message : 'Could not register tournament participant',
@@ -1342,7 +1911,7 @@ app.post('/api/tournament-entries', async (req, res) => {
 
     const message = error instanceof Error ? error.message : 'Could not create tournament entry';
 
-    if (/already|registered|enrolled|conflict/i.test(message)) {
+    if (/already|registered|enrolled|conflict|locked|started/i.test(message)) {
       return res.status(409).json({
         ok: false,
         message,
@@ -1428,6 +1997,12 @@ app.delete('/api/tournament-entries/:id', async (req, res) => {
     });
   } catch (error) {
     console.error('Failed to remove tournament entry:', error);
+    if (error instanceof Error && /locked after start/i.test(error.message)) {
+      return res.status(409).json({
+        ok: false,
+        message: 'Tournament participants are locked after start',
+      });
+    }
     return res.status(500).json({
       ok: false,
       message: 'Could not remove tournament entry',

@@ -239,6 +239,100 @@ test('renaming a reused team preserves its identity and rolls back name conflict
     });
     const remainingPeople = await (await fetch(`${base}/api/persons`)).json();
     assert.equal(remainingPeople.data.length, 2);
+
+    const runningTournament = (await post('/api/tournaments', { name: 'Running tournament' })).data;
+    const runningPeople = [];
+    for (const firstName of ['Eli', 'Finn', 'Gray', 'Harper', 'Indigo']) {
+      runningPeople.push((await post('/api/persons', {
+        firstName,
+        lastName: 'Tournament',
+        gender: 'm',
+      })).data);
+    }
+    for (const person of runningPeople.slice(0, 4)) {
+      await post('/api/tournament-participants', {
+        tournamentId: runningTournament.id,
+        personId: person.id,
+      });
+    }
+    entries = await (await fetch('/api/tournament-entries')).json();
+    const runningEntryIds = entries.data
+      .filter((entry) => entry.tournament_id === runningTournament.id)
+      .map((entry) => entry.id);
+    const runningDraw = {
+      version: 1,
+      configuration: {
+        groupPhaseEnabled: true,
+        groupCount: 1,
+        gamesPerPair: 1,
+        qualifierCount: 4,
+        placementPhaseEnabled: true,
+        placementGames: true,
+        luckyLosers: false,
+      },
+      groups: [runningEntryIds],
+      directBracketEntries: null,
+      brackets: {
+        endRound: [1, 2, 3, 4].map((place) => ({ type: 'group', groupIndex: 0, place })),
+        luckyLosers: null,
+      },
+    };
+    await put(`/api/tournaments/${runningTournament.id}/draw`, runningDraw);
+    const schedule = [];
+    for (let first = 0; first < runningEntryIds.length; first += 1) {
+      for (let second = first + 1; second < runningEntryIds.length; second += 1) {
+        schedule.push({
+          number: schedule.length + 1,
+          roundNumber: Math.floor(schedule.length / 2) + 1,
+          groupIndex: 0,
+          firstEntryId: runningEntryIds[first],
+          secondEntryId: runningEntryIds[second],
+        });
+      }
+    }
+    const rules = {
+      setsToWin: 1,
+      legsToWin: 3,
+      startingScore: 301,
+      startRule: 'single_in',
+      checkoutRule: 'single_out',
+      bullOutRule: 'classic',
+    };
+    const started = await post(`/api/tournaments/${runningTournament.id}/start`, {
+      ruleKey: 'group',
+      rules,
+      groupRanking: ['Platzierung', 'Siege'],
+      matches: schedule,
+    }, 200);
+    assert.equal(started.data.status, 'running');
+    assert.equal(started.data.activePhase.status, 'in_progress');
+
+    const savedMatches = await (await fetch(`/api/tournaments/${runningTournament.id}/matches`)).json();
+    assert.equal(savedMatches.data.activePhase.name, 'Gruppenphase');
+    assert.equal(savedMatches.data.matches.length, 6);
+    const firstMatch = savedMatches.data.matches[0];
+    const resultPath = `/api/tournaments/${runningTournament.id}/matches/${firstMatch.id}/result`;
+    const resultFor = (firstLegs, secondLegs) => [
+      { tournamentEntryId: firstMatch.participants[0].tournamentEntryId, setsWon: firstLegs > secondLegs ? 1 : 0, legsWon: firstLegs },
+      { tournamentEntryId: firstMatch.participants[1].tournamentEntryId, setsWon: secondLegs > firstLegs ? 1 : 0, legsWon: secondLegs },
+    ];
+    await put(resultPath, { results: resultFor(2, 1) }, 400);
+    const firstSavedResult = await put(resultPath, { results: resultFor(3, 1) });
+    assert.equal(firstSavedResult.data.winnerEntryId, firstMatch.participants[0].tournamentEntryId);
+    const editedResult = await put(resultPath, { results: resultFor(2, 3) });
+    assert.equal(editedResult.data.winnerEntryId, firstMatch.participants[1].tournamentEntryId);
+
+    const matchesAfterEdit = await (await fetch(`/api/tournaments/${runningTournament.id}/matches`)).json();
+    const editedMatch = matchesAfterEdit.data.matches.find((match) => match.id === firstMatch.id);
+    assert.equal(editedMatch.participants[0].legsWon, 2);
+    assert.equal(editedMatch.participants[1].legsWon, 3);
+    assert.equal(editedMatch.winnerEntryId, firstMatch.participants[1].tournamentEntryId);
+
+    await put(`/api/tournaments/${runningTournament.id}/draw`, runningDraw, 409);
+    await post('/api/tournament-participants', {
+      tournamentId: runningTournament.id,
+      personId: runningPeople[4].id,
+    }, 409);
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     if (child && child.exitCode === null) {
